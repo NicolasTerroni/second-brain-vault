@@ -1,0 +1,42 @@
+# Telegram -> Inbox bot. Run from this folder:  docker compose up -d --build
+# Bot settings come from scripts/.env (read by telegram_bot.py itself).
+# Only ONE copy of the bot may poll a token: stop any other instance (e.g. on Windows) first.
+services:
+  bot:
+    build: .
+    image: vault-scripts
+    container_name: vault-telegram-bot
+    restart: unless-stopped
+    stop_signal: SIGINT          # lets the bot exit through its Ctrl+C path
+    # Linux: write files as your user, not root. Set PUID/PGID if yours isn't 1000 (check with `id`).
+    user: "${PUID:-1000}:${PGID:-1000}"
+    volumes:
+      - ..:/vault                # whole vault: bot writes to "00 - Inbox"
+      - whisper-cache:/cache     # Whisper model + yt-dlp cache survive rebuilds
+    environment:
+      TZ: ${TZ:-UTC}             # note timestamps; e.g. TZ=America/Argentina/Buenos_Aires
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  # Vault -> Google Drive backup, every BACKUP_INTERVAL_HOURS (default 24). Setup: DOCKER.md, "Backup to Google Drive".
+  backup:
+    image: rclone/rclone:1
+    container_name: vault-backup
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    entrypoint: ["sh", "/vault/scripts/backup.sh"]
+    volumes:
+      - ..:/vault:ro             # read-only: the backup never changes the vault
+      - ./rclone:/config/rclone  # rclone.conf with the Drive token (git-ignored, not backed up)
+    environment:
+      TZ: ${TZ:-UTC}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-90}
+      BACKUP_FOLDER: ${BACKUP_FOLDER:-Vault-backup}
+    logging:
+      driver: json-file
+      options: { max-size: "1m", max-file: "3" }
+
+volumes:
+  whisper-cache:

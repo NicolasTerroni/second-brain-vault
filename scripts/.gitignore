@@ -1,0 +1,9 @@
+.env
+vendor/
+bot.stdout.log
+bot.stderr.log
+telegram.offset*
+.venv/
+__pycache__/
+cookies.txt
+rclone/

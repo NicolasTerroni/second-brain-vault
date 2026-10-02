@@ -1,0 +1,66 @@
+# Commit the system (instructions, scripts, Docker, Obsidian config), not the personal notes.
+
+# --- Personal notes: PARA folders. Only the empty folders are kept (.gitkeep) so a clone has the structure.
+/00 - Inbox/*
+/01 - Projects/*
+/02 - Areas/*
+/03 - Resources/*
+/04 - Archive/*
+!/00 - Inbox/.gitkeep
+!/01 - Projects/.gitkeep
+!/02 - Areas/.gitkeep
+!/03 - Resources/.gitkeep
+!/04 - Archive/.gitkeep
+
+# Navigation files list your note titles and activity. Personal.
+/index.md
+/log.md
+
+# --- Obsidian: keep shared settings, skip per-device state
+.obsidian/workspace*.json
+# Community plugin settings often hold API keys or tokens
+.obsidian/plugins/*/data.json
+.obsidian/cache
+.trash/
+
+# --- Scripts: secrets, runtime state, machine-specific packages
+scripts/.env
+scripts/cookies.txt
+scripts/telegram.offset*
+scripts/*.log
+scripts/vendor/
+scripts/.venv/
+__pycache__/
+*.pyc
+
+# --- Secrets and credential exports (including Obsidian plugin settings)
+**/.env
+**/.env.*
+!**/.env.example
+**/rclone.conf
+**/*credentials*.json
+**/*token*.json
+**/client_secret*.json
+**/service-account*.json
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+.obsidian/plugins/**/data.json
+
+# --- Secrets anywhere in the repo (defense in depth)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*token*.json
+rclone.conf
+
+# --- OS / editor clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+scripts/rclone/
