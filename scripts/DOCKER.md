@@ -60,6 +60,8 @@ YTDLP_COOKIES=/vault/scripts/cookies.txt   # optional; path *inside* the contain
 
 The first voice note or Reel downloads the Whisper model (`small` is about 500 MB) into the `whisper-cache` volume. Later runs reuse it.
 
+Telegram voice, audio, video-note and directly sent video transcripts are restricted to English or Spanish. The bot compares Whisper's language probabilities for those two languages and forces transcription in the stronger match. Instagram Reel and TikTok transcripts keep automatic language detection.
+
 ## Everyday commands (run in `scripts/`)
 
 | Task | Command |

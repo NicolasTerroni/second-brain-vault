@@ -7,6 +7,7 @@ Config (scripts/.env or environment):
   TELEGRAM_ALLOWED_IDS=123,456  your Telegram user id(s); only these can write to the vault
   WHISPER_MODEL=small           optional (tiny/base/small/medium)
   WHISPER_DEVICE=cpu            CPU is the safe default; CUDA needs separate NVIDIA libraries
+  Telegram voice/audio transcripts are constrained to English or Spanish; Reel transcripts keep automatic language detection.
 Run: python scripts/telegram_bot.py
 """
 import json, os, re, sys, time, html, tempfile, urllib.request, urllib.parse
@@ -60,7 +61,7 @@ def download(file_id, dest_dir, name_hint):
     return dest
 
 
-def transcribe(path):
+def transcribe(path, allowed_languages=None):
     global _whisper
     try:
         if _whisper is None:
@@ -70,7 +71,25 @@ def transcribe(path):
                 device=os.environ.get("WHISPER_DEVICE", "cpu"),
                 compute_type="int8",
             )
-        segs, _ = _whisper.transcribe(str(path))
+
+        if allowed_languages:
+            # Whisper auto-detects over its full language set. Use its language
+            # probabilities to choose only among the languages allowed for
+            # personal Telegram audio, then force decoding in that language.
+            detected_segments, detection = _whisper.transcribe(str(path))
+            probabilities = dict(detection.all_language_probs or [])
+            if detection.language in allowed_languages:
+                language = detection.language
+                segs = detected_segments
+            else:
+                language = max(allowed_languages, key=lambda code: probabilities.get(code, 0.0))
+                segs, _ = _whisper.transcribe(str(path), language=language)
+            print(
+                f"Telegram audio: transcribing as {language} "
+                f"(detector probability {probabilities.get(language, 0.0):.2f})"
+            )
+        else:
+            segs, _ = _whisper.transcribe(str(path))
         return " ".join(s.text.strip() for s in segs).strip()
     except ImportError:
         return None
@@ -398,7 +417,7 @@ def handle(msg):
         title = {"voice": "Voice note", "audio": "Audio", "video_note": "Video note"}.get(kind, kind.capitalize())
         tags = ["telegram", kind]
         if kind in ("voice", "audio", "video_note", "video"):
-            tr = transcribe(f)
+            tr = transcribe(f, allowed_languages=("es", "en"))
             if tr:
                 body += f"\n## Transcript\n{tr}\n"
                 title = tr

@@ -45,3 +45,8 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 ### Vault content (details in `log.md`)
 - Processed the Inbox twice: 9 captures moved to Sources, plus fetched captions and posts saved as raw sources.
 - Distilled the original Training notes, and created the Training MOC and new notes for English, Training, Software and AI, and Business Ideas.
+
+## 2026-10-03
+
+### Telegram audio language selection
+- Directly sent Telegram voice/audio/video clips now choose between English and Spanish using Whisper's language probabilities, then force transcription in the stronger match. Reel and TikTok transcription behavior is unchanged.
