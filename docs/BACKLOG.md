@@ -35,7 +35,7 @@ Proposed improvements to the vault system, most important first. Agents: when an
 ## 7. Docker polish
 - [x] Pin versions: base images by digest, Python packages by hashed `requirements.lock` (`docker compose run --rm lock`); only yt-dlp floats. Done 2026-10-03.
 - [x] Health check for the bot (heartbeat file, local check every 2 min, no tokens). Done 2026-10-03.
-- [ ] Turn on Docker Desktop's "start when you sign in" on Windows, so the bot survives a reboot. **User action:** Docker Desktop → Settings → General (the agent may not change startup settings).
+- [x] Docker Desktop starts when you sign in (turned on by the user, verified: `AutoStart` on, both containers `restart: unless-stopped`). Done 2026-10-03.
 - [x] Backup image adds tzdata (logs in local time; history names stay UTC) and zip: history is stored as `history/<date>.zip`. Done 2026-10-03.
 - [ ] **Stray app copy in the vault.** A clone of the habit tracker app sits in a folder literally named `%USERPROFILE%` at the vault root, probably from a command that didn't expand the path. It is backed up to Drive and shows as untracked in git. Decide where it belongs (e.g. `~/Documents/everyday-habit-tracker`) and move it, or add it to `.gitignore` and the backup excludes.
 
@@ -47,3 +47,14 @@ Proposed improvements to the vault system, most important first. Agents: when an
   - **Feedback into the wiki.** Long streaks or repeated misses update the Area notes (e.g. "mobility held 4 weeks; Cindy missed 3 of 4"). Projects with a deadline (15 pull-ups) get progress from the app.
   - **What the combination gives:** goals with evidence; notes that are tested against real behaviour, not just collected; and a single place to ask "how am I doing on X and what should I change?"
   - **Open questions:** Which direction does data flow (app → wiki, wiki → app, or both)? Where does tracker data live, given notes are private and backed up to Drive? Is the zero-token rule kept (scripts sync the data, and the LLM only reviews)? Does the app expose an API, or does it need one?
+
+## 9. Bot: commands and interaction (proposed 2026-10-03)
+Zero-token ideas first; the ones marked 💬 call an LLM.
+- [ ] **Reply = same capture.** Replying to the bot's "Saved: …" message (or sending a comment within 2 minutes) adds the text to that capture instead of creating a new note. A loose comment ("loved this discipline video") currently has to be paired with its link by timestamp.
+- [ ] **Area buttons after saving.** `[Training] [English] [Career] [Discipline] [Soft skills] [Other]`; the choice adds an `area/…` tag so organizing doesn't guess (e.g. the James Wynne profile).
+- [ ] **Commands menu** (`setMyCommands`): `/todo` (this week's [[Pending Tasks]]), `/done <text>` (tick a task), `/q` (next unanswered question from Questions About Me; the next voice note is filed as its answer), `/inbox` (count and titles), `/status` (bot health, last backup, failures), `/backup` (run now).
+- [ ] **Morning brief** (scheduled message): today's minimums from Discipline, days left to the C1 exam, one past English correction to review (spaced repetition from Daily Speaking Practice), one task from Pending Tasks. Reminders themselves stay in the habit tracker, to avoid double nagging.
+- [ ] **Sunday review prompt**: counts the week's `#english-practice` voice notes and asks the 3 review questions; the reply is saved as the week's review.
+- [ ] 💬 **English feedback on voice notes**: after transcribing an English note, reply with 2-3 corrections and one more natural phrasing (small model, about a cent a day). Supports the C1 exam project.
+- [ ] 💬 **`/ask <question>`**: answer from the wiki (index → pages) with citations, through Claude Code in headless mode on the host. **`/organize`**: process the Inbox remotely, with a confirm button because it spends tokens. This is the "Claude Code on a server, reached through Telegram" idea from the English practice notes.
+- [ ] **Habit check-ins from the bot**: `/did mobility` or the English voice note itself ticks the habit in the habit tracker app (needs an API token on the app; see section 8).

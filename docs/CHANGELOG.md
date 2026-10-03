@@ -73,3 +73,7 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 - `lint.py` no longer reports attachment, canvas and path links as broken. It ignores links in `log.md` (append-only history), doesn't report Inbox captures as orphans, checks `index.md` for wiki pages only, and reports stale source indexes. Output is UTF-8 on Windows.
 - New `scripts/source_index.py`: generates `Sources index - <type>.md` in every Sources type folder (captured date, kind, creator, topic, wiki notes; by month, newest first) and refreshes their list in `index.md` between `sources-index` markers. `--check` only reports.
 - `AGENTS.md`: the per-type source index convention, `sources:` frontmatter as the link from a wiki note to its raw sources, `source_index.py` in the ingest and Inbox workflows, and the `#sensitive` tag.
+
+### Agent rules: personal context
+- `AGENTS.md` has a new **Personal context** section. `02 - Areas/About Me/About Me.md` is the hub agents read for personal queries and update whenever a capture reveals something about the user; contact details and sensitive data stay out. Open questions live in `Questions About Me.md`, and answers arrive as voice notes starting with "Question N".
+- `AGENTS.md`: `Pending Tasks.md` (in About Me) is the user's task list. Agents add the tasks only the user can do, with a link to their note, and tick them when reported done.

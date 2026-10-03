@@ -138,6 +138,14 @@ The vault is a git repo for the **system only** (see `.gitignore`): instructions
 - `.obsidian/` (app configuration) unless the user explicitly asks.
 - `README.md` content is the user's; edit only when asked.
 
+## Personal context
+
+The vault should know the user well enough to connect their goals, notes and habits.
+- `02 - Areas/About Me/About Me.md` is the hub: biography, current goals, what helps and what gets in the way. Read it for any personal query, plan or review.
+- When a capture or a chat message reveals something about the user (a goal, preference, constraint, fact or change of plan), update About Me and the notes it affects in the same operation, and say so in the log. Never add contact details or sensitive data (rule 8).
+- `02 - Areas/About Me/Questions About Me.md` holds open questions. An answer arrives as a voice note starting with "Question N". Move the answer into About Me and the related notes, and tick the question. When you learn something that raises a new question, add it there instead of guessing.
+- `02 - Areas/About Me/Pending Tasks.md` lists what the vault is waiting on from the user. When a note creates a task only the user can do, add it there with a link to its note. Tick items the user reports done, and move system work to `docs/BACKLOG.md`.
+
 ## Existing context
 
 - `03 - Resources/Second Brain/SECOND BRAIN.md`: the user's own statement of vault purpose.
