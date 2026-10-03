@@ -1,3 +1,9 @@
+# Direct dependencies. Native installs (venv, Windows vendor/) use this file.
+# Docker installs requirements.lock instead: every version pinned and hashed, except yt-dlp,
+# which is installed fresh on each build. Regenerate the lock after editing this file:
+#   docker compose run --rm lock
 yt-dlp
 faster-whisper
 av>=11,<19
+pytesseract   # OCR for the sensitive-data check on photos; needs the tesseract binary (in the Docker image)
+Pillow

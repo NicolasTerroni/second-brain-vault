@@ -1,7 +1,8 @@
 #!/bin/sh
 # Vault -> Google Drive backup (runs in the rclone container, see compose.yaml and DOCKER.md).
-#   Drive:Vault-backup/current         mirror of the vault
-#   Drive:Vault-backup/history/<date>  files changed or deleted by each run, kept $BACKUP_KEEP_DAYS days
+#   Drive:Vault-backup/current             mirror of the vault (plain files)
+#   Drive:Vault-backup/history/<date>.zip  files changed or deleted by each run, zipped, kept $BACKUP_KEEP_DAYS days
+# History names use UTC (<date> = YYYY-MM-DD_HHMMZ); log lines use local time (TZ).
 # Each successful run writes "<epoch> <UTC time>" to scripts/rclone/last_backup.
 #   sh backup.sh          loop: back up whenever BACKUP_INTERVAL_HOURS have passed since the last backup
 #   sh backup.sh --once   back up now and exit (used by backup_if_due.py)
@@ -14,9 +15,36 @@ DEST="gdrive:${BACKUP_FOLDER:-Vault-backup}"
 INTERVAL="${BACKUP_INTERVAL_HOURS:-24}"
 KEEP="${BACKUP_KEEP_DAYS:-90}"
 
+now() { date '+%Y-%m-%d %H:%M %Z'; }
+
+# rclone can only move replaced files to a folder on the same remote (--backup-dir), so each run's
+# history/<date>/ folder is zipped afterwards: download it, zip it, upload <date>.zip, then remove the folder.
+# Any folder left by an older run or a failed attempt is converted on the next run.
+zip_history() {
+  rclone mkdir "$DEST/history" || return 1
+  for dir in $(rclone lsf "$DEST/history" --dirs-only); do
+    name="${dir%/}"
+    tmp=$(mktemp -d) || return 1
+    mkdir -p "$tmp/$name"
+    rclone copy "$DEST/history/$name" "$tmp/$name" && {
+      if [ -z "$(ls -A "$tmp/$name")" ]; then
+        rclone purge "$DEST/history/$name"          # empty folder, nothing to keep
+      else
+        (cd "$tmp/$name" && zip -qr -X "$tmp/$name.zip" .) \
+          && rclone copyto "$tmp/$name.zip" "$DEST/history/$name.zip" \
+          && rclone purge "$DEST/history/$name" \
+          && echo "[$(now)] history: $name -> $name.zip"   # folder removed only after the zip is uploaded and verified
+      fi
+    }
+    rc=$?
+    rm -rf "$tmp"
+    [ $rc -eq 0 ] || { echo "[$(now)] history: could not zip $name"; return 1; }
+  done
+}
+
 backup() {
   stamp=$(date -u +%Y-%m-%d_%H%MZ)
-  echo "[$stamp] backup start"
+  echo "[$(now)] backup start"
   if rclone sync "$VAULT" "$DEST/current" \
       --backup-dir "$DEST/history/$stamp" \
       --create-empty-src-dirs \
@@ -24,14 +52,14 @@ backup() {
       --exclude "scripts/vendor/**" --exclude "scripts/.venv/**" --exclude "**/__pycache__/**" \
       --exclude "scripts/*.log" --exclude ".obsidian/workspace*.json" --exclude ".git/**" \
       --stats-one-line --stats 0 --log-level NOTICE \
-    && rclone mkdir "$DEST/history" \
+    && zip_history \
     && rclone delete "$DEST/history" --min-age "${KEEP}d" \
     && rclone rmdirs "$DEST/history" --leave-root; then
     echo "$(date -u +%s) $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LAST"
     rm -f "$FAIL"
-    echo "[$(date -u +%Y-%m-%d_%H%MZ)] backup done"
+    echo "[$(now)] backup done"
   else
-    echo "[$(date -u +%Y-%m-%d_%H%MZ)] backup FAILED"
+    echo "[$(now)] backup FAILED"
     prev=$(cut -d' ' -f1 "$FAIL" 2>/dev/null)
     echo "$(date -u +%s) $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$FAIL"
     # Alert on the first failure, then at most once a day while it keeps failing.

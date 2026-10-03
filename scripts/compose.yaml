@@ -1,5 +1,5 @@
-# Telegram -> Inbox bot. Run from this folder:  docker compose up -d --build
-# Bot settings come from scripts/.env (read by telegram_bot.py itself).
+# Telegram -> Inbox bot and Google Drive backup. Run from this folder:  docker compose up -d --build
+# Works the same on Windows (Docker Desktop) and Linux. Bot settings come from scripts/.env (read by telegram_bot.py itself).
 # Only ONE copy of the bot may poll a token: stop any other instance (e.g. on Windows) first.
 services:
   bot:
@@ -15,13 +15,24 @@ services:
       - whisper-cache:/cache     # Whisper model + yt-dlp cache survive rebuilds
     environment:
       TZ: ${TZ:-UTC}             # note timestamps; e.g. TZ=America/Argentina/Buenos_Aires
+    # The bot touches /tmp/vault-bot.heartbeat on every poll (at most 50 s apart). No touch for 15 min = stalled.
+    # Runs a tiny local Python check: no network, no tokens.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/tmp/vault-bot.heartbeat') > 900)"]
+      interval: 2m
+      timeout: 10s
+      start_period: 5m
+      retries: 2
     logging:
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
 
   # Vault -> Google Drive backup, every BACKUP_INTERVAL_HOURS (default 24). Setup: DOCKER.md, "Backup to Google Drive".
   backup:
-    image: rclone/rclone:1
+    build:
+      context: .
+      dockerfile: backup.Dockerfile
+    image: vault-backup
     container_name: vault-backup
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -37,6 +48,27 @@ services:
     logging:
       driver: json-file
       options: { max-size: "1m", max-file: "3" }
+
+  # Tool, never started by `up`: regenerate requirements.lock after editing requirements.txt.
+  #   docker compose run --rm lock
+  lock:
+    profiles: [tools]
+    image: python:3.12.15-slim-trixie@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
+    user: "${PUID:-1000}:${PGID:-1000}"
+    working_dir: /w
+    volumes:
+      - .:/w
+    environment:
+      HOME: /tmp
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        pip install --user --quiet pip-tools &&
+        python -m piptools compile --quiet --generate-hashes --strip-extras
+        --unsafe-package yt-dlp --output-file requirements.lock requirements.txt &&
+        echo "requirements.lock updated"
 
 volumes:
   whisper-cache:

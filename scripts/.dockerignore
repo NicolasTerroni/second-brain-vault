@@ -1,3 +1,3 @@
-# The image only needs requirements.txt; code and data come from the vault mount.
+# The images only need the lock file; code and data come from the vault mount.
 *
-!requirements.txt
+!requirements.lock

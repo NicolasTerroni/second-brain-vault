@@ -50,3 +50,26 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 
 ### Telegram audio language selection
 - Directly sent Telegram voice/audio/video clips now choose between English and Spanish using Whisper's language probabilities, then force transcription in the stronger match. Reel and TikTok transcription behavior is unchanged.
+
+### Bot
+- **Transcription feedback**: voice notes, audio, video and Reels/TikToks get an immediate "⏳ Transcribing…" reply, edited into "Saved: …" when done. The Whisper model loads in a background thread at startup (`WHISPER_PRELOAD=0` turns it off).
+- **Full X posts**: after the X API (if configured), the bot uses the public fxtwitter API for the full post text, author, @handle, date and quoted post. X's embed is the last fallback.
+- **Sensitive data**: the user's text, voice transcripts and photos (Tesseract OCR, English + Spanish) are checked for PINs, PUKs, passwords, card numbers (Luhn), CVVs, CBU/IBAN, API keys and tokens, and seed phrases. A match is held outside the vault and the bot asks **Save anyway** / **Discard** (inline buttons). Kept captures are tagged `sensitive`. Held items expire after 24 h or on restart.
+- English voice notes and video notes are tagged `english-practice`: the check-in for Daily Speaking Practice.
+- Heartbeat file `/tmp/vault-bot.heartbeat`, touched on every poll.
+
+### Docker
+- **Pinned versions**: the bot image is `python:3.12.15-slim-trixie` and the backup image is `rclone/rclone:1.75.1`, both pinned by multi-platform digest. Python packages come from the hashed `requirements.lock`, generated in a Linux container by the new `lock` tool service (`docker compose run --rm lock`). Only yt-dlp floats.
+- The bot image adds Tesseract OCR (`eng`, `spa`), plus `pytesseract` and `Pillow`.
+- **Health check**: the bot is `unhealthy` after 15 minutes without a heartbeat. The check is a local Python one-liner every 2 minutes.
+- New `backup.Dockerfile`: rclone plus `zip` and `tzdata`.
+
+### Backup
+- **Zipped history**: each run's `history/<date>/` folder is downloaded, zipped, uploaded as `history/<date>.zip` and removed only after the upload is verified. Leftover folders are converted on the next run. The existing history folder was converted on 2026-10-03. `current/` stays a plain mirror.
+- Log lines use local time (`TZ`); history names stay UTC.
+
+### Lint and source indexes
+- New `scripts/vault.py`: shared note discovery, frontmatter parsing and Obsidian-style link resolution (note names, attachment and canvas file names, full or partial paths, case- and Unicode-insensitive).
+- `lint.py` no longer reports attachment, canvas and path links as broken. It ignores links in `log.md` (append-only history), doesn't report Inbox captures as orphans, checks `index.md` for wiki pages only, and reports stale source indexes. Output is UTF-8 on Windows.
+- New `scripts/source_index.py`: generates `Sources index - <type>.md` in every Sources type folder (captured date, kind, creator, topic, wiki notes; by month, newest first) and refreshes their list in `index.md` between `sources-index` markers. `--check` only reports.
+- `AGENTS.md`: the per-type source index convention, `sources:` frontmatter as the link from a wiki note to its raw sources, `source_index.py` in the ingest and Inbox workflows, and the `#sensitive` tag.
