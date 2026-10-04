@@ -7,3 +7,4 @@ telegram.offset*
 __pycache__/
 cookies.txt
 rclone/
+telegram.state*

@@ -11,12 +11,17 @@ Config (scripts/.env or environment):
   OCR_LANGS=eng+spa             Tesseract languages for the sensitive-data check on photos (Docker image only)
   Telegram voice/audio transcripts are constrained to English or Spanish; Reel transcripts keep automatic language detection.
   English voice notes and video notes are tagged `english-practice` (the Daily Speaking Practice check-in).
+  BRIEF_TIME=08:00              morning brief, in the bot's TZ ("off" disables it)
+  REVIEW_TIME=Sun 18:00         weekly review prompt ("off" disables it)
 Messages that look like they hold secrets (PIN, password, card number, token...) are held until you tap Save or Discard.
+Replying to a "Saved" message adds to that same note. /help lists the commands (tasks, questions, standup, brief...);
+their vault logic is in companion.py.
 Run: python scripts/telegram_bot.py
 """
 import json, os, re, sys, time, html, secrets, shutil, tempfile, threading, urllib.request, urllib.parse
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+import companion
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = Path(__file__).with_name("vendor")
@@ -38,15 +43,25 @@ def load_env():
         for line in f.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.strip().startswith("#"):
                 k, v = line.split("=", 1)
+                v = v.strip()
+                if not v.startswith(("'", '"')):
+                    v = re.split(r"\s+#", v, maxsplit=1)[0]  # inline comment, as in .env.example
                 os.environ.setdefault(k.strip(), v.strip().strip('"\''))
 
 
 load_env()
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ALLOWED = {int(x) for x in os.environ.get("TELEGRAM_ALLOWED_IDS", "").replace(" ", "").split(",") if x}
+ALLOWED_LIST = [int(x) for x in os.environ.get("TELEGRAM_ALLOWED_IDS", "").replace(" ", "").split(",") if x]
+ALLOWED = set(ALLOWED_LIST)
+OWNER = ALLOWED_LIST[0] if ALLOWED_LIST else None   # private chat that gets the brief and the weekly review
+BRIEF_TIME = os.environ.get("BRIEF_TIME", "08:00").strip()
+REVIEW_TIME = os.environ.get("REVIEW_TIME", "Sun 18:00").strip()
 API = f"https://api.telegram.org/bot{TOKEN}"
 _whisper = None
 _whisper_lock = threading.Lock()
+STATE = companion.load_state()   # bot message id -> what a reply to it means; last brief/review sent
+AREAS = [[("Training", "area:training"), ("English", "area:english"), ("Career", "area:career"), ("Discipline", "area:discipline")],
+         [("Soft skills", "area:soft-skills"), ("Software & AI", "area:software-ai"), ("About me", "area:about-me")]]
 
 
 def api(method, **params):
@@ -56,10 +71,12 @@ def api(method, **params):
 
 
 def reply(chat, text, message_id=None, buttons=None):
-    """Send a message, or edit `message_id` in place (a status line becoming the result). Returns the message id."""
+    """Send a message, or edit `message_id` in place (a status line becoming the result). Returns the message id.
+    `buttons`: one row [(label, data), ...] or several rows [[...], [...]]."""
     params = {"chat_id": chat, "text": text}
     if buttons:
-        params["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]})
+        rows = buttons if isinstance(buttons[0], list) else [buttons]
+        params["reply_markup"] = json.dumps({"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]})
     try:
         if message_id:
             api("editMessageText", message_id=message_id, **params)
@@ -68,6 +85,17 @@ def reply(chat, text, message_id=None, buttons=None):
     except Exception as e:
         print("reply failed:", e)
         return None
+
+
+def remember(message_id, context):
+    """What a reply to this bot message means: add to a capture, answer a question, a standup or the weekly review."""
+    if not message_id:
+        return
+    replies = STATE.setdefault("replies", {})
+    replies[str(message_id)] = context
+    for key in list(replies)[:-300]:  # keep the last 300
+        del replies[key]
+    companion.save_state(STATE)
 
 
 def beat():
@@ -525,6 +553,10 @@ def handle(msg):
         return
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     text = msg.get("text") or msg.get("caption") or ""
+    if msg.get("text", "").startswith("/"):
+        command(chat, msg["text"])
+        return
+    context = STATE.get("replies", {}).get(str((msg.get("reply_to_message") or {}).get("message_id")))
     media = None
     for kind in ("voice", "audio", "video_note", "video", "document"):
         if kind in msg:
@@ -631,16 +663,72 @@ def handle(msg):
             item = {"title": text.split("\n")[0], "body": text, "source": urls[0], "tags": ["telegram", "link"]}
         else:
             item = {"title": text.split("\n")[0] or "Note", "body": text, "source": "telegram", "tags": ["telegram"]}
+    if context:
+        apply_context(item, context)
     finish(chat, item, check, status)
 
 
+def apply_context(item, context):
+    """A reply to one of the bot's messages: add to that capture, or file it as an answer, standup or weekly review."""
+    kind = context.get("kind")
+    if kind == "capture":
+        item["append_to"] = context["path"]
+    elif kind == "question":
+        n = context["n"]
+        item.update(title=f"Answer to Question {n}", body=f"Answer to **Question {n}:** {context['text']}\n\n{item['body']}")
+        item["tags"] = [*item["tags"], "about-me", f"question-{n}"]
+    elif kind == "standup":
+        item.update(title=f"Standup {date.today().isoformat()}",
+                    body="Daily standup: what I did at work today. English corrections come at the next organize.\n\n" + item["body"])
+        item["tags"] = [*item["tags"], "standup"]
+    elif kind == "review":
+        week = date.today().isocalendar()
+        item.update(title=f"Weekly review {week[0]}-W{week[1]:02d}", body="Weekly review (Discipline).\n\n" + item["body"])
+        item["tags"] = [*item["tags"], "weekly-review"]
+
+
+def add_tags(path, tags):
+    """Add tags to a note's inline `tags: [...]` frontmatter list."""
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"^tags: \[(.*)\]$", text, re.M)
+    if not m:
+        return
+    current = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    merged = ", ".join(dict.fromkeys([*current, *tags]))
+    path.write_text(text[:m.start()] + f"tags: [{merged}]" + text[m.end():], encoding="utf-8")
+
+
 def save(item):
+    """Write the capture. Returns (path, appended): appended when it was added to an earlier capture still in the Inbox."""
     for f in item.get("files", []):
         ATTACH.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), str(ATTACH / f.name))
+    target = ROOT / item["append_to"] if item.get("append_to") else None
+    if target and target.exists() and INBOX in target.parents:
+        with target.open("a", encoding="utf-8") as f:
+            f.write(f"\n## Added {datetime.now():%Y-%m-%d %H:%M}\n{item['body'].strip()}\n")
+        add_tags(target, [t for t in item["tags"] if t not in ("telegram", "raw")])
+        print("appended to", target)
+        return target, True
+    if target:  # the capture was already organized: raw sources are immutable, so make a linked new capture
+        item = {**item, "body": f"Comment on [[{target.stem}]]:\n\n{item['body']}", "tags": [*item["tags"], "comment"]}
     p = write_note(item["title"], item["body"], source=item["source"], tags=item["tags"])
     print("saved", p)
-    return p
+    return p, False
+
+
+def announce(chat, saved, status=None, note=""):
+    """Tell the user where the capture went; replies to this message add to it."""
+    path, appended = saved
+    if appended:
+        text = f"➕ Added to: {path.name}{note}\n↩️ Reply again to keep adding to it."
+        buttons = None
+    else:
+        text = (f"✅ Saved: {path.name}{note}\n↩️ Reply to this message to add more to this same note (text, voice, photo). "
+                "Anything sent without replying becomes a new note.\nArea? (optional, tap one or more)")
+        buttons = AREAS
+    message_id = reply(chat, text, status, buttons=buttons)
+    remember(message_id, {"kind": "capture", "path": path.relative_to(ROOT).as_posix()})
 
 
 def discard(item):
@@ -652,7 +740,7 @@ def finish(chat, item, check, status=None):
     """Save the capture, or hold it and ask first when the user's text, transcript or photo looks like it holds a secret."""
     hits = sensitive_hits(check)
     if not hits:
-        reply(chat, f"Saved: {save(item).name}", status)
+        announce(chat, save(item), status)
         return
     token = secrets.token_hex(6)
     PENDING[token] = {**item, "time": time.time()}
@@ -663,7 +751,7 @@ def finish(chat, item, check, status=None):
 
 
 def handle_button(query):
-    """Save or Discard tapped on a held capture."""
+    """Inline buttons: Save/Discard a held capture, tag an area, skip a question, start a standup, tick a task."""
     message = query.get("message") or {}
     chat, message_id = message.get("chat", {}).get("id"), message.get("message_id")
     try:
@@ -672,16 +760,204 @@ def handle_button(query):
         print("answerCallbackQuery failed:", e)
     if query.get("from", {}).get("id") not in ALLOWED or not chat:
         return
-    action, _, token = (query.get("data") or "").partition(":")
-    item = PENDING.pop(token, None)
-    if not item:
-        reply(chat, "This capture is no longer held (the bot restarted or 24 h passed). Send it again if you want it.", message_id)
-    elif action == "save":
-        item["tags"] = [*item["tags"], "sensitive"]  # agents leave #sensitive captures in the Inbox (AGENTS.md rule 8)
-        reply(chat, f"Saved, tagged #sensitive: {save(item).name}", message_id)
+    action, _, arg = (query.get("data") or "").partition(":")
+    if action in ("save", "drop"):
+        item = PENDING.pop(arg, None)
+        if not item:
+            reply(chat, "This capture is no longer held (the bot restarted or 24 h passed). Send it again if you want it.", message_id)
+        elif action == "save":
+            item["tags"] = [*item["tags"], "sensitive"]  # agents leave #sensitive captures in the Inbox (AGENTS.md rule 8)
+            announce(chat, save(item), message_id, note=" (tagged #sensitive)")
+        else:
+            discard(item)
+            reply(chat, "Discarded. Nothing was saved.", message_id)
+    elif action == "area":
+        context = STATE.get("replies", {}).get(str(message_id), {})
+        path = ROOT / context.get("path", "")
+        tag = f"area/{arg}"
+        if context.get("kind") != "capture" or not path.is_file() or INBOX not in path.parents:
+            reply(chat, "That note has already been organized, so its tags can't change from here.")
+            return
+        add_tags(path, [tag])
+        text = message.get("text", "")
+        if f"#{tag}" not in text:
+            reply(chat, f"{text}\n🏷 #{tag}", message_id, buttons=AREAS)
+    elif action == "q":
+        send_question(chat, after=int(arg), message_id=message_id)
+    elif action == "standup":
+        send_standup(chat)
+    elif action == "done":
+        task = STATE.get("done_choices", {}).get(arg)
+        if task and companion.tick_task(int(arg), task):
+            reply(chat, f"✅ Done: {companion.plain(task)}", message_id)
+        else:
+            reply(chat, "That task changed or was already ticked. Try /done again.", message_id)
+
+
+# ---------- commands ----------
+HELP = """🤖 What I can do
+
+Send anything (text, a link, a voice note, a photo, a file) and it lands in your Inbox.
+↩️ Reply to a "Saved" message to add to that same note instead of making a new one.
+
+/todo: this week's pending tasks
+/add <task>: add a task to your Pending Tasks list
+/done <words>: tick off a task (no words: pick from a list)
+/q: the next unanswered question about you. Reply to it to answer (an English voice note is best)
+/standup: tell me your workday in English. Corrections come at the next organize
+/brief: the morning brief, now
+/review: the weekly review, now
+/inbox: what's waiting in the Inbox
+/status: bot health and last backup
+/backup: back up to Google Drive now
+/help: this message
+
+🔜 Coming soon
+/ask <question>: answer from your wiki, with the notes it used
+/organize: process the Inbox from your phone
+/did <habit>: tick a habit in your habit tracker app
+
+⏰ {schedule}"""
+
+SOON = {
+    "/ask": "🔜 /ask is coming soon.\nIt will answer your question from the wiki: read index.md, open the notes that matter, and reply "
+            "with the answer and the notes it used. It runs Claude Code on your PC, so each question spends tokens.",
+    "/organize": "🔜 /organize is coming soon.\nIt will process the Inbox the way you now ask for it in chat: file each raw capture, "
+                 "write the distilled notes, add English corrections from standups, update the indexes and the log, and send you a "
+                 "summary. It will ask for confirmation first, because it spends tokens.",
+    "/did": "🔜 /did is coming soon.\nIt will tick a habit in your habit tracker app (e.g. /did mobility), and an English voice note "
+            "will tick \"English speaking\" by itself. It needs an API on the app first: see Pending Tasks, \"Habit tracker × LLM wiki\".",
+}
+
+COMMANDS = [("todo", "This week's pending tasks"), ("add", "Add a pending task"), ("done", "Tick off a task"),
+            ("q", "Next question about you"), ("standup", "Today's standup in English"), ("brief", "Morning brief now"),
+            ("review", "Weekly review now"), ("inbox", "What's in the Inbox"), ("status", "Bot health and last backup"),
+            ("backup", "Back up now"), ("help", "All commands"), ("ask", "Coming soon: ask your wiki"),
+            ("organize", "Coming soon: process the Inbox"), ("did", "Coming soon: tick a habit")]
+
+
+def schedule_text():
+    parts = []
+    if BRIEF_TIME.lower() != "off":
+        parts.append(f"Every morning at {BRIEF_TIME}: your brief.")
+    if REVIEW_TIME.lower() != "off":
+        parts.append(f"{REVIEW_TIME.split()[0]}days at {REVIEW_TIME.split()[-1]}: the weekly review.")
+    return " ".join(parts) or "No scheduled messages."
+
+
+def send_question(chat, after=None, message_id=None):
+    q = companion.next_question(after)
+    if not q:
+        reply(chat, "🎉 No open questions (answers waiting in the Inbox count as answered).", message_id)
+        return
+    n, text, _ = q
+    sent = reply(chat, f"❓ Question {n}\n{text}\n\n↩️ Reply to this message to answer. An English voice note is best: "
+                       "it's also your speaking practice.", message_id,
+                 buttons=[("⏭ Another question", f"q:{n}"), ("🗣 Today's standup instead", "standup")])
+    remember(sent, {"kind": "question", "n": n, "text": text})
+
+
+def send_standup(chat):
+    sent = reply(chat, "🗣 Today's standup\n↩️ Reply to this message with an English voice note: what you did at work today, "
+                       "what blocked you, what's next. I'll transcribe it now, and the agent adds corrections to Daily Speaking "
+                       "Practice at the next organize.")
+    remember(sent, {"kind": "standup"})
+
+
+def send_review(chat):
+    remember(reply(chat, companion.review_text()), {"kind": "review"})
+
+
+def command(chat, text):
+    cmd, _, arg = text.strip().partition(" ")
+    cmd, arg = cmd.split("@")[0].lower(), arg.strip()
+    if cmd in ("/start", "/help"):
+        reply(chat, HELP.format(schedule=schedule_text()))
+    elif cmd in SOON:
+        reply(chat, SOON[cmd])
+    elif cmd == "/todo":
+        week = companion.this_week()
+        rest = len(companion.open_tasks()) - len(week)
+        lines = [f"{i}. {companion.plain(t[2])}" for i, t in enumerate(week, 1)] or ["Nothing for this week. 🎉"]
+        reply(chat, "📌 This week\n" + "\n".join(lines) + (f"\n\n+{rest} more for later in Pending Tasks." if rest else "")
+              + "\nTick one: /done <words>")
+    elif cmd == "/add":
+        if not arg:
+            reply(chat, "Usage: /add <task>, e.g. /add book the C1 exam")
+        elif sensitive_hits(arg):
+            reply(chat, "That looks like it contains a secret. Keep it in a password manager, not in a task.")
+        elif companion.add_task(arg):
+            reply(chat, f"📌 Added to Pending Tasks: {arg}\nThe agent files it into the right section at the next organize.")
+        else:
+            reply(chat, "Pending Tasks note not found.")
+    elif cmd == "/done":
+        matches = companion.find_tasks(arg) if arg else companion.this_week()
+        if arg and len(matches) == 1:
+            line, _, task, _ = matches[0]
+            ok = companion.tick_task(line, task)
+            reply(chat, f"✅ Done: {companion.plain(task)}" if ok else "That task just changed. Try again.")
+        elif not matches:
+            reply(chat, f"No open task matches \"{arg}\". /todo lists them." if arg else "Nothing open this week. 🎉")
+        else:
+            STATE["done_choices"] = {str(t[0]): t[2] for t in matches[:8]}
+            companion.save_state(STATE)
+            reply(chat, "Which one is done?", buttons=[[(companion.plain(t[2])[:60], f"done:{t[0]}")] for t in matches[:8]])
+    elif cmd == "/q":
+        send_question(chat)
+    elif cmd == "/standup":
+        send_standup(chat)
+    elif cmd == "/brief":
+        reply(chat, companion.brief_text())
+    elif cmd == "/review":
+        send_review(chat)
+    elif cmd == "/inbox":
+        titles = companion.inbox_titles()
+        reply(chat, f"📥 Inbox: {len(titles)} capture(s)\n" + "\n".join(f"• {t}" for t in titles[:20])
+              + ("\n…" if len(titles) > 20 else "") if titles else "📥 The Inbox is empty.")
+    elif cmd == "/status":
+        loaded = "loaded" if _whisper is not None else "not loaded yet"
+        reply(chat, f"🟢 Bot running · Whisper {loaded} · {len(PENDING)} capture(s) waiting for Save/Discard\n"
+                    f"📥 Inbox: {len(companion.inbox_titles())} · 💾 {companion.backup_status()}\n⏰ {schedule_text()}")
+    elif cmd == "/backup":
+        if companion.request_backup():
+            reply(chat, "💾 Backup requested. The backup service starts it within a minute and messages you when it's done.")
+        else:
+            reply(chat, "Backup isn't set up on this machine (no scripts/rclone folder).")
     else:
-        discard(item)
-        reply(chat, "Discarded. Nothing was saved.", message_id)
+        reply(chat, f"Unknown command {cmd}. /help lists what I can do.")
+
+
+# ---------- scheduled messages ----------
+def due(spec, key, window_hours):
+    """True once per period when now is inside [time, time + window). spec: "08:00" (daily) or "Sun 18:00" (weekly)."""
+    if spec.lower() == "off":
+        return False
+    parts = spec.split()
+    now = datetime.now()
+    if len(parts) == 2 and parts[0][:3].lower() != ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][now.weekday()]:
+        return False
+    hour, minute = map(int, parts[-1].split(":"))
+    start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    iso = now.isocalendar()
+    period = f"{iso[0]}-W{iso[1]:02d}" if len(parts) == 2 else now.date().isoformat()
+    return start <= now < start + timedelta(hours=window_hours) and STATE.get(key) != period and period
+
+
+def scheduled():
+    if not OWNER:
+        return
+    try:
+        period = due(BRIEF_TIME, "brief", 3)
+        if period and reply(OWNER, companion.brief_text()):
+            STATE["brief"] = period
+            companion.save_state(STATE)
+        period = due(REVIEW_TIME, "review", 6)
+        if period:
+            send_review(OWNER)
+            STATE["review"] = period
+            companion.save_state(STATE)
+    except Exception as e:
+        print("scheduled message failed:", e)
 
 
 def expire_pending():
@@ -697,6 +973,10 @@ def main():
     shutil.rmtree(STAGE, ignore_errors=True)  # media of captures held before a restart
     if os.environ.get("WHISPER_PRELOAD", "1") != "0":
         threading.Thread(target=preload_whisper, daemon=True).start()
+    try:
+        api("setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in COMMANDS]))
+    except Exception as e:
+        print("setMyCommands failed:", e)
     offset_file = Path(__file__).with_name("telegram.offset")
     try:
         offset = int(offset_file.read_text(encoding="utf-8").strip())
@@ -706,6 +986,7 @@ def main():
         try:
             beat()
             expire_pending()
+            scheduled()
             params = {"timeout": 50, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset:
                 params["offset"] = offset

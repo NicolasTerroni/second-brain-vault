@@ -48,7 +48,7 @@ Optional entries in `scripts/.env` (compose reads them too):
 ```
 PUID=1000                      # Linux: your `id -u`; files in the vault are written as this user
 PGID=1000                      # Linux: your `id -g`
-TZ=America/Argentina/Buenos_Aires   # timezone for note timestamps (default UTC)
+TZ=Europe/Madrid   # timezone for note timestamps, the morning brief and the weekly review (default UTC)
 YTDLP_COOKIES=/vault/scripts/cookies.txt   # optional; path *inside* the container
 ```
 
@@ -78,6 +78,23 @@ On first start, the bot downloads the Whisper model (`small` is about 500 MB) in
 Messages that look like they hold secrets (a PIN, PUK, password, card number, CVV, CBU/IBAN, token or seed phrase in your text, your voice note's transcript, or a photo read by Tesseract OCR) are not saved straight away. The bot asks **Save anyway** / **Discard**. Until you answer, the media waits outside the vault in the container's `/tmp`. Held captures are dropped after 24 h or when the bot restarts. A capture you save anyway is tagged `#sensitive`.
 
 Telegram voice, audio, video-note and directly sent video transcripts are restricted to English or Spanish. The bot compares Whisper's language probabilities for those two languages and forces transcription in the stronger match. Instagram Reel and TikTok transcripts keep automatic language detection.
+
+## Talking to the bot
+
+Send anything and it becomes a note in `00 - Inbox`. **Reply** to the bot's "✅ Saved" message to add more to that same note. Only replies are merged, so a new message never gets attached by accident. After each save, area buttons (Training, English, Career…) add an `area/…` tag that guides the next organize.
+
+Commands (`/help` in Telegram shows the same list):
+
+| Command | What it does |
+|---|---|
+| `/todo` · `/add <task>` · `/done <words>` | Show this week's Pending Tasks, add one, tick one off (edits `Pending Tasks.md`) |
+| `/q` | Next unanswered question from `Questions About Me`. A reply is saved as the answer (`#question-N`) |
+| `/standup` | Prompt for today's workday in English. The reply is saved as `#standup`; corrections are added at the next organize |
+| `/brief` · `/review` | The morning brief or the weekly review, on demand |
+| `/inbox` · `/status` · `/backup` | Inbox contents; bot health and last backup; back up now (the backup service starts within a minute and confirms in Telegram) |
+| `/ask` · `/organize` · `/did` | Coming soon: shows what each will do |
+
+Scheduled messages, in the bot's `TZ`: the **morning brief** at `BRIEF_TIME` (default `08:00`) and the **weekly review** at `REVIEW_TIME` (default `Sun 18:00`). Set either to `off` in `scripts/.env`. The brief shows today's minimums from Discipline, the English voice-note reminder (and whether yesterday's was sent), project deadlines, one past English correction to review, and the top pending task. All of this is read straight from the notes, with no tokens. Reply-tracking and send times live in `scripts/telegram.state.json` (git-ignored).
 
 ## Everyday commands (run in `scripts/`)
 
@@ -155,7 +172,9 @@ To keep it running, use a systemd service with `ExecStart=/home/<you>/Vault/scri
 
 - **`409 Conflict` in logs**: another bot is polling the same token. Stop it.
 - **Permission denied writing to `00 - Inbox`**: `PUID`/`PGID` don't match the owner of the vault folder (`ls -ln ~/Vault`).
-- **Wrong timestamps on notes**: set `TZ` in `scripts/.env`, then `docker compose up -d`.
+- **Wrong timestamps, or the brief arrives at the wrong hour**: set `TZ` in `scripts/.env` (e.g. `Europe/Madrid`), then `docker compose up -d`. A plain restart does not pick up a new `TZ`.
 - **Instagram downloads fail**: update yt-dlp (see above), or export cookies to `scripts/cookies.txt` and set `YTDLP_COOKIES`.
 - **Windows host**: Docker Desktop must be running. Leave `PUID`/`PGID` unset. To survive a reboot, turn on Docker Desktop → Settings → General → **Start Docker Desktop when you sign in**. The containers then come back on their own (`restart: unless-stopped`).
+- **Docker Desktop won't start ("An unexpected error occurred … listening on unix://… The file cannot be accessed by the system")**: a crash or unclean shutdown left stale socket files (`AppData\Local\Docker\run\…`, `AppData\Local\docker-secrets-engine\engine.sock`) that Windows can't remove. Quit the error dialog, then run `powershell -ExecutionPolicy Bypass -File scripts\windows\start-docker.ps1`. It moves those folders aside (renamed `*.stale-<date>`, nothing deleted) and starts Docker. To make it automatic, open Task Manager → Startup apps, disable "Docker Desktop", and add a shortcut to that command in `shell:startup`.
+- **Docker didn't start at sign-in although "Start Docker Desktop when you sign in" is on**: check Task Manager → Startup apps → Docker Desktop is *Enabled*. Turning the Docker setting off, applying, then on again rewrites the entry.
 - **`unhealthy` bot**: `docker compose logs --tail 50 bot` to see where it stopped, then `docker compose restart bot`.

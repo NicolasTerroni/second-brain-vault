@@ -14,7 +14,7 @@ services:
       - ..:/vault                # whole vault: bot writes to "00 - Inbox"
       - whisper-cache:/cache     # Whisper model + yt-dlp cache survive rebuilds
     environment:
-      TZ: ${TZ:-UTC}             # note timestamps; e.g. TZ=America/Argentina/Buenos_Aires
+      TZ: ${TZ:-UTC}             # note timestamps; e.g. TZ=Europe/Madrid
     # The bot touches /tmp/vault-bot.heartbeat on every poll (at most 50 s apart). No touch for 15 min = stalled.
     # Runs a tiny local Python check: no network, no tokens.
     healthcheck:

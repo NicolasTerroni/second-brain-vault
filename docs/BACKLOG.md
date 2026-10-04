@@ -37,6 +37,7 @@ Proposed improvements to the vault system, most important first. Agents: when an
 - [x] Health check for the bot (heartbeat file, local check every 2 min, no tokens). Done 2026-10-03.
 - [x] Docker Desktop starts when you sign in (turned on by the user, verified: `AutoStart` on, both containers `restart: unless-stopped`). Done 2026-10-03.
 - [x] Backup image adds tzdata (logs in local time; history names stay UTC) and zip: history is stored as `history/<date>.zip`. Done 2026-10-03.
+- [ ] **Docker Desktop reliability on Windows.** On 2026-10-04 it didn't start at sign-in (Run entry present, StartupApproved bytes all zero), then crashed on stale sockets. Fix with `scripts/windows/start-docker.ps1`; **user action:** check Task Manager → Startup apps and decide whether the script replaces Docker's own startup entry.
 - [ ] **Stray app copy in the vault.** A clone of the habit tracker app sits in a folder literally named `%USERPROFILE%` at the vault root, probably from a command that didn't expand the path. It is backed up to Drive and shows as untracked in git. Decide where it belongs (e.g. `~/Documents/everyday-habit-tracker`) and move it, or add it to `.gitignore` and the backup excludes.
 
 ## 8. Habit tracker × LLM wiki (to think through)
@@ -46,15 +47,20 @@ Proposed improvements to the vault system, most important first. Agents: when an
   - **Weekly review.** An agent reads the week's streaks and the related wiki notes, then writes a review: what slipped, what held, and which note or routine to adjust. It saves the review to the Inbox.
   - **Feedback into the wiki.** Long streaks or repeated misses update the Area notes (e.g. "mobility held 4 weeks; Cindy missed 3 of 4"). Projects with a deadline (15 pull-ups) get progress from the app.
   - **What the combination gives:** goals with evidence; notes that are tested against real behaviour, not just collected; and a single place to ask "how am I doing on X and what should I change?"
+  - **Two connections to design.** (1) **Bot → habit tracker**: check-ins from Telegram (`/did <habit>`, shown as "coming soon" in `/help`), and an English voice note ticks "English speaking" automatically. (2) **Wiki ↔ habit tracker**: the agent reads streaks for the weekly review and the morning brief, and habits link to the notes that explain them. Both need an API (token or webhook) on the app.
   - **Open questions:** Which direction does data flow (app → wiki, wiki → app, or both)? Where does tracker data live, given notes are private and backed up to Drive? Is the zero-token rule kept (scripts sync the data, and the LLM only reviews)? Does the app expose an API, or does it need one?
+
+## 10. Seeing video content
+- [x] Contact sheets of Reels for distilling (`scripts/reel_frames.py`, rule in AGENTS.md). Done 2026-10-04.
+- [ ] Re-process older training Reels with no usable transcript: Luka hip mobility, Paul Duddy morning flow, Carlos Mina squat + halo, Danko protocol (the guide itself is still behind a comment), Tom Holland / Cindy.
 
 ## 9. Bot: commands and interaction (proposed 2026-10-03)
 Zero-token ideas first; the ones marked 💬 call an LLM.
-- [ ] **Reply = same capture.** Replying to the bot's "Saved: …" message (or sending a comment within 2 minutes) adds the text to that capture instead of creating a new note. A loose comment ("loved this discipline video") currently has to be paired with its link by timestamp.
-- [ ] **Area buttons after saving.** `[Training] [English] [Career] [Discipline] [Soft skills] [Other]`; the choice adds an `area/…` tag so organizing doesn't guess (e.g. the James Wynne profile).
-- [ ] **Commands menu** (`setMyCommands`): `/todo` (this week's [[Pending Tasks]]), `/done <text>` (tick a task), `/q` (next unanswered question from Questions About Me; the next voice note is filed as its answer), `/inbox` (count and titles), `/status` (bot health, last backup, failures), `/backup` (run now).
-- [ ] **Morning brief** (scheduled message): today's minimums from Discipline, days left to the C1 exam, one past English correction to review (spaced repetition from Daily Speaking Practice), one task from Pending Tasks. Reminders themselves stay in the habit tracker, to avoid double nagging.
-- [ ] **Sunday review prompt**: counts the week's `#english-practice` voice notes and asks the 3 review questions; the reply is saved as the week's review.
-- [ ] 💬 **English feedback on voice notes**: after transcribing an English note, reply with 2-3 corrections and one more natural phrasing (small model, about a cent a day). Supports the C1 exam project.
+- [x] **Reply = same capture.** Replying to the bot's "Saved: …" message adds the text, voice note or photo to that capture instead of creating a new note. Only replies are merged, so a normal message is never attached by accident; the Saved message explains this. Done 2026-10-03.
+- [x] **Area buttons after saving.** `[Training] [English] [Career] [Discipline] [Soft skills] [Software & AI] [About me]`; the choice adds an `area/…` tag so organizing doesn't guess (e.g. the James Wynne profile). Done 2026-10-03.
+- [x] **Commands menu** (`setMyCommands`): `/help`, `/todo`, `/add <task>`, `/done <text>`, `/q` (reply = answer, with a "standup instead" button), `/standup`, `/brief`, `/review`, `/inbox`, `/status`, `/backup`; `/ask`, `/organize` and `/did` show a "coming soon" description. Done 2026-10-03.
+- [x] **Morning brief** (`BRIEF_TIME`, default 08:00), including the English voice-note reminder: today's minimums from Discipline, days left to the C1 exam, one past English correction to review (spaced repetition from Daily Speaking Practice), one task from Pending Tasks. Reminders themselves stay in the habit tracker, to avoid double nagging. Done 2026-10-03.
+- [x] **Sunday review prompt** (`REVIEW_TIME`, default Sun 18:00): counts the week's `#english-practice` voice notes and asks the 3 review questions; the reply is saved as the week's review. Done 2026-10-03.
+- [x] ~~💬 English feedback in the bot~~: decided 2026-10-03 that corrections happen at organize instead (`#standup` / `#english-practice` captures → Daily Speaking Practice), so the bot spends no tokens.
 - [ ] 💬 **`/ask <question>`**: answer from the wiki (index → pages) with citations, through Claude Code in headless mode on the host. **`/organize`**: process the Inbox remotely, with a confirm button because it spends tokens. This is the "Claude Code on a server, reached through Telegram" idea from the English practice notes.
-- [ ] **Habit check-ins from the bot**: `/did mobility` or the English voice note itself ticks the habit in the habit tracker app (needs an API token on the app; see section 8).
+- [ ] **Habit check-ins from the bot** (connection 1 in section 8; `/did` is listed as coming soon): `/did mobility` or the English voice note itself ticks the habit in the habit tracker app (needs an API token on the app; see section 8).

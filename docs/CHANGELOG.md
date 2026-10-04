@@ -77,3 +77,28 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 ### Agent rules: personal context
 - `AGENTS.md` has a new **Personal context** section. `02 - Areas/About Me/About Me.md` is the hub agents read for personal queries and update whenever a capture reveals something about the user; contact details and sensitive data stay out. Open questions live in `Questions About Me.md`, and answers arrive as voice notes starting with "Question N".
 - `AGENTS.md`: `Pending Tasks.md` (in About Me) is the user's task list. Agents add the tasks only the user can do, with a link to their note, and tick them when reported done.
+
+### Bot: companion features
+- **Replies add to a capture**: replying to the "✅ Saved" message appends a `## Added <time>` section (text, voice transcript, photo) to that note while it's in the Inbox. Once it's organized, the reply becomes a new capture linked to it. The Saved message explains this.
+- **Area buttons** after each save add `area/<slug>` tags as classification hints.
+- **Commands** (`setMyCommands`, `/help`): `/todo`, `/add`, `/done` (edit `Pending Tasks.md`), `/q` (next open question; the reply is saved as `#question-N`, with a "standup instead" button), `/standup` (reply saved as `#standup`), `/brief`, `/review`, `/inbox`, `/status`, `/backup`. `/ask`, `/organize` and `/did` reply with a "coming soon" description.
+- **Scheduled messages**: a morning brief at `BRIEF_TIME` (minimums from Discipline with staged start dates, the English voice-note reminder with yesterday's check-in, project `deadline:` countdowns, a past correction to review, the top task) and a weekly review prompt at `REVIEW_TIME` (reply saved as `#weekly-review`).
+- New `scripts/companion.py` (stdlib, no tokens) holds the vault logic. Bot state is in `scripts/telegram.state.json` (git-ignored).
+- **Backup on request**: the backup loop checks every minute for `scripts/rclone/backup_requested` (written by `/backup`) and confirms in Telegram; scheduled backups still run every `BACKUP_INTERVAL_HOURS`.
+- `AGENTS.md`: how to organize `#question-N`, `#standup` (corrections into Daily Speaking Practice), `#weekly-review`, `area/` hints, `## Added` sections, and tasks added from Telegram.
+
+## 2026-10-04
+
+### Time zone
+- The bot and backup run on `Europe/Madrid` (`TZ` in `scripts/.env`), so note names, the morning brief and the weekly review follow Barcelona time. Docs and examples now use `Europe/Madrid`.
+- Telegram task text keeps arrows that are part of the text (e.g. "Settings → Time & language"); only `→ [[link]]` pointers are stripped.
+
+### Docker Desktop on Windows
+- After the reboot on 2026-10-04, Docker Desktop crashed again on stale AF_UNIX socket files (`Docker\run\dockerInference`, `docker-secrets-engine\engine.sock`, Windows error 1920). New `scripts/windows/start-docker.ps1` moves those folders aside and starts Docker. `DOCKER.md` troubleshooting covers it and the sign-in start not firing.
+
+### Agent rules: workout logging
+- `AGENTS.md`: a capture starting with "Workout" is logged in `Full-Body Strength Log`, and the agent updates each exercise's next target using the log's progression rules.
+
+### Seeing video content
+- New `scripts/reel_frames.py` (run in the bot container) downloads a Reel/TikTok/Short temporarily and writes contact sheets of about 24 timestamped frames, then deletes the video. Agents view them to identify moves that the audio doesn't name.
+- `AGENTS.md`: the user approved this on 2026-10-04 for videos whose transcript and caption don't name the content. Sheets are deleted after viewing, and nothing visual is stored in the vault.

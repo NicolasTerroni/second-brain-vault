@@ -11,6 +11,7 @@ CONF_DIR="${RCLONE_CONFIG_DIR:-/config/rclone}"
 export RCLONE_CONFIG="$CONF_DIR/rclone.conf"
 LAST="$CONF_DIR/last_backup"
 FAIL="$CONF_DIR/last_failure"   # present only while backups are failing
+REQ="$CONF_DIR/backup_requested" # written by the bot's /backup command
 DEST="gdrive:${BACKUP_FOLDER:-Vault-backup}"
 INTERVAL="${BACKUP_INTERVAL_HOURS:-24}"
 KEEP="${BACKUP_KEEP_DAYS:-90}"
@@ -99,6 +100,11 @@ fi
 [ "$1" = "--once" ] && { backup; exit $?; }
 
 while true; do
-  due && backup
-  sleep 3600
+  if [ -f "$REQ" ]; then          # /backup from Telegram: run now and report back
+    rm -f "$REQ"
+    backup && alert "✅ Backup to Google Drive done (requested from Telegram)."
+  elif due; then
+    backup
+  fi
+  sleep 60                        # a check is two file reads; the backup itself still runs every BACKUP_INTERVAL_HOURS
 done

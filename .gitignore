@@ -27,6 +27,7 @@
 scripts/.env
 scripts/cookies.txt
 scripts/telegram.offset*
+scripts/telegram.state*
 scripts/*.log
 scripts/vendor/
 scripts/.venv/
