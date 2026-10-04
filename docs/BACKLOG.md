@@ -12,7 +12,7 @@ Proposed improvements to the vault system, most important first. Agents: when an
 - [x] **Video metadata.** Done 2026-10-02: Reels, TikToks and YouTube get a full `## Metadata` section (creator, date, duration, music, tags, hashtags, chapters, full caption), and TikTok is handled like Reels.
 - [ ] **Music detection.** Use faster-whisper's `no_speech_prob` and language probability to mark a transcript as "background music" instead of saving made-up text (one Reel produced invented Arabic).
 - [x] **Full X posts without an API key.** The bot falls back to the public fxtwitter API for the full text and any quoted post. Done 2026-10-03.
-- [ ] **Live test of the fxtwitter capture.** Partly verified on 2026-10-03: a post came in with its full text, @handle and date, and no fallback warning. Still to check: a post that **quotes** another post gets a `## Quoted post` section.
+- [x] **Live test of the fxtwitter capture.** Done 2026-10-04: a quote post came in with full text, author, date and a `## Quoted post` section. Partly verified on 2026-10-03: a post came in with its full text, @handle and date, and no fallback warning. Still to check: a post that **quotes** another post gets a `## Quoted post` section.
 - [x] **Transcription feedback.** Immediate "⏳ Transcribing…" reply that becomes "Saved: …"; Whisper loads at startup (3 s from cache). Done 2026-10-03.
 - [x] **Sensitive data warning.** Text, transcripts and photos (Tesseract OCR) are checked; the bot asks Save anyway / Discard and tags kept ones `#sensitive`. Done 2026-10-03.
 
@@ -28,7 +28,7 @@ Proposed improvements to the vault system, most important first. Agents: when an
 - [x] Rules for: original notes in PARA without conventions, captions and full post text as extra raw sources, same-creator updates, language, sensitive data, backup check. Done 2026-10-02 (see `AGENTS.md`).
 
 ## 6. Make Areas actionable
-- [ ] **Training:** a weekly plan in the Training MOC (mobility every morning; Cindy or the basic AMRAP 3 times a week). Turn "15 pull-ups" into a project with a deadline.
+- [ ] **Training:** finish defining the full-body home routine with the user, then derive a measurable training project from it (the earlier "15 pull-ups" idea was only a test, dropped 2026-10-04).
 - [x] **English:** habit and check-in in Daily Speaking Practice; the bot tags English voice notes `#english-practice`. Done 2026-10-03. Adding the habit in the habit tracker app is left to the user (needs their login).
 - [x] **Link-only notes:** `sellable ideas` and `youtube channels` re-processed from the Inbox as sources, distilled into new notes. Done 2026-10-03.
 
@@ -45,14 +45,15 @@ Proposed improvements to the vault system, most important first. Agents: when an
   - **Habits from Areas.** Each recurring practice in a wiki Area (Daily Speaking Practice, the morning mobility routine, Cindy 3× a week) becomes a habit in the app, linked back to the note that explains how to do it.
   - **Automatic check-ins from captures.** An English voice note to the bot (`#english-practice`) ticks the habit in the app. This needs an API token or webhook on the app side, so the bot never uses the user's login.
   - **Weekly review.** An agent reads the week's streaks and the related wiki notes, then writes a review: what slipped, what held, and which note or routine to adjust. It saves the review to the Inbox.
-  - **Feedback into the wiki.** Long streaks or repeated misses update the Area notes (e.g. "mobility held 4 weeks; Cindy missed 3 of 4"). Projects with a deadline (15 pull-ups) get progress from the app.
+  - **Feedback into the wiki.** Long streaks or repeated misses update the Area notes (e.g. "mobility held 4 weeks; Cindy missed 3 of 4"). Projects with a deadline get progress from the app.
   - **What the combination gives:** goals with evidence; notes that are tested against real behaviour, not just collected; and a single place to ask "how am I doing on X and what should I change?"
   - **Two connections to design.** (1) **Bot → habit tracker**: check-ins from Telegram (`/did <habit>`, shown as "coming soon" in `/help`), and an English voice note ticks "English speaking" automatically. (2) **Wiki ↔ habit tracker**: the agent reads streaks for the weekly review and the morning brief, and habits link to the notes that explain them. Both need an API (token or webhook) on the app.
+  - **Third connection (user request 2026-10-04): Google Calendar.** Add events and reminders to Google Calendar straight from the bot or the vault (e.g. `/event …`), and let the agent see upcoming events for the brief and planning. Needs a Google Calendar API OAuth client, which could reuse the user's own Google Cloud project planned for rclone.
   - **Open questions:** Which direction does data flow (app → wiki, wiki → app, or both)? Where does tracker data live, given notes are private and backed up to Drive? Is the zero-token rule kept (scripts sync the data, and the LLM only reviews)? Does the app expose an API, or does it need one?
 
 ## 10. Seeing video content
 - [x] Contact sheets of Reels for distilling (`scripts/reel_frames.py`, rule in AGENTS.md). Done 2026-10-04.
-- [ ] Re-process older training Reels with no usable transcript: Luka hip mobility, Paul Duddy morning flow, Carlos Mina squat + halo, Danko protocol (the guide itself is still behind a comment), Tom Holland / Cindy.
+- [x] Re-processed the older training videos from frames: Luka, Paul Duddy, Carlos Mina, Danko, Cindy, Pav Mann, and Trevor Shan's YouTube Short. Done 2026-10-04. Danko's written guide is still behind a comment.
 
 ## 9. Bot: commands and interaction (proposed 2026-10-03)
 Zero-token ideas first; the ones marked 💬 call an LLM.

@@ -102,3 +102,5 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 ### Seeing video content
 - New `scripts/reel_frames.py` (run in the bot container) downloads a Reel/TikTok/Short temporarily and writes contact sheets of about 24 timestamped frames, then deletes the video. Agents view them to identify moves that the audio doesn't name.
 - `AGENTS.md`: the user approved this on 2026-10-04 for videos whose transcript and caption don't name the content. Sheets are deleted after viewing, and nothing visual is stored in the vault.
+- `reel_frames.py --frames N` for dense sampling (e.g. 60 frames over 16 s). The AGENTS.md rule notes `MSYS_NO_PATHCONV=1` for the cleanup, which Git Bash had silently skipped.
+- `reel_frames.py --segment label:start-end --size N`: one collage per time range (e.g. per exercise) from a single download. `AGENTS.md` exception: frames may be stored in a note's `Attachments/` when the user asks for them.
