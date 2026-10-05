@@ -18,6 +18,10 @@ QUESTIONS = ABOUT / "Questions About Me.md"
 DISCIPLINE = ROOT / "02 - Areas" / "Discipline" / "Discipline.md"
 SPEAKING = ROOT / "02 - Areas" / "English" / "Daily Speaking Practice.md"
 PROJECTS = ROOT / "01 - Projects"
+ROUTINE = ROOT / "02 - Areas" / "Training" / "home-training" / "Full-Body Strength + Mobility Routine (Home).md"
+STRENGTH_LOG = ROOT / "02 - Areas" / "Training" / "home-training" / "Full-Body Strength Log.md"
+CANVAS = ROOT / "02 - Areas" / "Training" / "Full Training Routine.canvas"
+DAY_NAMES = {1: "Day 1 · Basics", 2: "Day 2 · Strength + mobility"}
 ADDED = "## 📥 Added from Telegram"
 THIS_WEEK = "## 🔥 This week"
 TASK_RE = re.compile(r"^- \[( |x)\] (.+)$")
@@ -208,7 +212,74 @@ def correction_of_the_day(today):
     return items[today.toordinal() % len(items)] if items else None
 
 
-def brief_text(today=None):
+# ---------- training ----------
+def sessions():
+    """[(date, day)] from the Session log table of the strength log; day is 1 or 2 (tests and other rows are skipped)."""
+    out, inside = [], False
+    for line in _lines(STRENGTH_LOG):
+        if line.startswith("## "):
+            inside = line.startswith("## Session log")
+        elif inside and line.startswith("| 20"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            m = re.search(r"\d", cells[1]) if len(cells) > 1 else None
+            if m and m.group(0) in "12":
+                try:
+                    out.append((date.fromisoformat(cells[0][:10]), int(m.group(0))))
+                except ValueError:
+                    pass
+    return sorted(out)
+
+
+def training_status(today=None):
+    """Which session is next (alternating from the last logged one), and how many this week vs. the target."""
+    today = today or date.today()
+    fm, _ = frontmatter(read(ROUTINE)) if ROUTINE.exists() else (None, "")
+    fm = fm or {}
+    target = int(str(fm.get("target_per_week", "3")) or 3)
+    try:
+        start = date.fromisoformat(str(fm.get("start", ""))[:10])
+    except ValueError:
+        start = None
+    done = sessions()
+    last = done[-1] if done else None
+    next_day = 2 if last and last[1] == 1 else 1
+    monday = today - timedelta(days=today.weekday())
+    this_week = sum(1 for d, _ in done if monday <= d <= today)
+    return {"start": start, "target": target, "last": last, "next": next_day, "this_week": this_week,
+            "days_since": (today - last[0]).days if last else None}
+
+
+def training_line(today=None):
+    today = today or date.today()
+    s = training_status(today)
+    if s["start"] and today < s["start"]:
+        return f"🏋️ Training starts {s['start']:%a %d %b} with {DAY_NAMES[1]}."
+    text = f"🏋️ Next session: {DAY_NAMES[s['next']]} (~40 min). This week: {s['this_week']}/{s['target']}."
+    if s["last"]:
+        text += f" Last: Day {s['last'][1]} on {s['last'][0]:%a %d %b}."
+        if s["days_since"] and s["days_since"] >= 3:
+            text += " ⚠️ 3+ days without training: today is a good day."
+    return text + " /train shows it."
+
+
+def session_plan(day):
+    """The text cards of one day from the routine canvas (Day 1 = d1-*, Day 2 = d2-*), plus the shared start."""
+    try:
+        nodes = json.loads(CANVAS.read_text(encoding="utf-8")).get("nodes", [])
+    except (OSError, ValueError):
+        return None
+    cards = {n["id"]: n for n in nodes if n.get("type") == "text"}
+    blocks = ("upper", "legs", "core", "flow") if day == 1 else ("skill", "main", "legs", "core")
+    order = ["hang"] + [f"d{day}-{block}" for block in blocks]
+    parts = ["Warm-up: Trevor Shan's 5-min routine"]
+    for node_id in order:
+        if node_id in cards:
+            parts.append(plain(cards[node_id]["text"]).replace("### ", "").strip())
+    return "\n\n".join(parts)
+
+
+def brief_text(today=None, habit_lines=None):
+    """habit_lines: from habits.brief_lines (the habit tracker app), placed after the training line."""
     today = today or date.today()
     weekday = today.weekday() < 5
     lines = [f"☀️ Good morning! {today:%A %d %B}"]
@@ -238,6 +309,10 @@ def brief_text(today=None):
     for name, days in deadlines(today):
         if days >= 0:
             lines.append(f"⏳ {name}: {days} days left")
+    if ROUTINE.exists():
+        lines.append("\n" + training_line(today))
+    if habit_lines:
+        lines.append("\n" + "\n".join(habit_lines))
     tip = correction_of_the_day(today)
     if tip:
         lines.append(f"\n🔁 Review this correction:\n{tip}")
@@ -247,20 +322,25 @@ def brief_text(today=None):
     return "\n".join(lines)
 
 
-def review_text(today=None):
+def review_text(today=None, habit_lines=None):
+    """habit_lines: from habits.review_lines (this week's counts in the habit tracker app)."""
     today = today or date.today()
     monday = today - timedelta(days=today.weekday())
     done = english_checkins(monday, today)
     workdays = min(5, (today - monday).days + 1)
-    return "\n".join([
-        f"🗓 Weekly review · week {today.isocalendar()[1]}",
-        f"\n🎙 English voice notes this week: {len(done)} of {workdays} workdays",
-        "\nAnswer in one reply to this message (voice or text):",
-        "1. How many days did you keep each minimum?",
-        "2. What made it easy, and what got in the way?",
-        "3. The ONE thing you'll change next week (smaller minimum, better time, or drop it).",
-        "\nThe agent adds it to your Discipline review log at the next organize.",
-    ])
+    lines = [f"🗓 Weekly review · week {today.isocalendar()[1]}",
+             f"\n🎙 English voice notes this week: {len(done)} of {workdays} workdays"]
+    if habit_lines:
+        lines += habit_lines
+        questions = ["1. What made the ✅ habits easy, and what got in the way of the 🔴 ones?",
+                     "2. The ONE thing you'll change next week (smaller minimum, better time, or drop it)."]
+    else:
+        questions = ["1. How many days did you keep each minimum?",
+                     "2. What made it easy, and what got in the way?",
+                     "3. The ONE thing you'll change next week (smaller minimum, better time, or drop it)."]
+    lines += ["\nAnswer in one reply to this message (voice or text):", *questions,
+              "\nThe agent adds it to your Discipline review log at the next organize."]
+    return "\n".join(lines)
 
 
 # ---------- inbox and backup ----------

@@ -22,6 +22,7 @@ import json, os, re, sys, time, html, secrets, shutil, tempfile, threading, urll
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import companion
+import habits
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = Path(__file__).with_name("vendor")
@@ -805,6 +806,8 @@ Send anything (text, a link, a voice note, a photo, a file) and it lands in your
 /done <words>: tick off a task (no words: pick from a list)
 /q: the next unanswered question about you. Reply to it to answer (an English voice note is best)
 /standup: tell me your workday in English. Corrections come at the next organize
+/train: your next training session (Day 1 or 2), exercise by exercise. /train 1 or /train 2 for a specific day
+/habits: how consistent you are this week with the habits in your habit tracker app, and what to fix
 /brief: the morning brief, now
 /review: the weekly review, now
 /inbox: what's waiting in the Inbox
@@ -826,11 +829,11 @@ SOON = {
                  "write the distilled notes, add English corrections from standups, update the indexes and the log, and send you a "
                  "summary. It will ask for confirmation first, because it spends tokens.",
     "/did": "🔜 /did is coming soon.\nIt will tick a habit in your habit tracker app (e.g. /did mobility), and an English voice note "
-            "will tick \"English speaking\" by itself. It needs an API on the app first: see Pending Tasks, \"Habit tracker × LLM wiki\".",
+            "will tick \"English speaking\" by itself. The app's API is read-only for now (it feeds /habits); this needs it to accept entries.",
 }
 
 COMMANDS = [("todo", "This week's pending tasks"), ("add", "Add a pending task"), ("done", "Tick off a task"),
-            ("q", "Next question about you"), ("standup", "Today's standup in English"), ("brief", "Morning brief now"),
+            ("q", "Next question about you"), ("standup", "Today's standup in English"), ("train", "Next training session"), ("habits", "Habit consistency this week"), ("brief", "Morning brief now"),
             ("review", "Weekly review now"), ("inbox", "What's in the Inbox"), ("status", "Bot health and last backup"),
             ("backup", "Back up now"), ("help", "All commands"), ("ask", "Coming soon: ask your wiki"),
             ("organize", "Coming soon: process the Inbox"), ("did", "Coming soon: tick a habit")]
@@ -864,8 +867,28 @@ def send_standup(chat):
     remember(sent, {"kind": "standup"})
 
 
+def habit_report():
+    """Fresh consistency report from the habit tracker app (also rewrites Habit Consistency.md), or None."""
+    if not habits.configured():
+        return None
+    try:
+        rep, error = habits.refresh()
+        if error:
+            print("habit tracker:", error)
+        return rep
+    except Exception as e:  # never let the app break the brief or the review
+        print("habit report failed:", e)
+        return None
+
+
+def brief_text():
+    rep = habit_report()
+    return companion.brief_text(habit_lines=habits.brief_lines(rep) if rep else None)
+
+
 def send_review(chat):
-    remember(reply(chat, companion.review_text()), {"kind": "review"})
+    rep = habit_report()
+    remember(reply(chat, companion.review_text(habit_lines=habits.review_lines(rep) if rep else None)), {"kind": "review"})
 
 
 def command(chat, text):
@@ -906,8 +929,23 @@ def command(chat, text):
         send_question(chat)
     elif cmd == "/standup":
         send_standup(chat)
+    elif cmd == "/train":
+        status = companion.training_status()
+        day = int(arg) if arg in ("1", "2") else status["next"]
+        plan = companion.session_plan(day)
+        if not plan:
+            reply(chat, "The routine canvas wasn't found (02 - Areas/Training/Full Training Routine.canvas).")
+        else:
+            reply(chat, f"🏋️ {companion.DAY_NAMES[day]} (~40 min)\n\n{plan}\n\n{companion.training_line()}\n"
+                        f"When you finish, send: Workout, day {day}. …your reps per set…")
+    elif cmd == "/habits":
+        if not habits.configured():
+            reply(chat, "The habit tracker app isn't connected: set HABITS_API_URL and HABITS_API_TOKEN in scripts/.env.")
+        else:
+            rep = habit_report()
+            reply(chat, habits.week_text(rep) if rep else "📊 The habit tracker app couldn't be reached, and there's no saved copy yet.")
     elif cmd == "/brief":
-        reply(chat, companion.brief_text())
+        reply(chat, brief_text())
     elif cmd == "/review":
         send_review(chat)
     elif cmd == "/inbox":
@@ -948,7 +986,7 @@ def scheduled():
         return
     try:
         period = due(BRIEF_TIME, "brief", 3)
-        if period and reply(OWNER, companion.brief_text()):
+        if period and reply(OWNER, brief_text()):
             STATE["brief"] = period
             companion.save_state(STATE)
         period = due(REVIEW_TIME, "review", 6)

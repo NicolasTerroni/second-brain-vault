@@ -28,7 +28,8 @@ Proposed improvements to the vault system, most important first. Agents: when an
 - [x] Rules for: original notes in PARA without conventions, captions and full post text as extra raw sources, same-creator updates, language, sensitive data, backup check. Done 2026-10-02 (see `AGENTS.md`).
 
 ## 6. Make Areas actionable
-- [ ] **Training:** finish defining the full-body home routine with the user, then derive a measurable training project from it (the earlier "15 pull-ups" idea was only a test, dropped 2026-10-04).
+- [x] **Training:** home routine defined (two alternating days, canvas, log; brief + `/train` show the next session). Done 2026-10-04.
+- [ ] **Training project:** after 4-6 logged weeks, derive a measurable goal from the benchmarks (the earlier "15 pull-ups" was only a test).
 - [x] **English:** habit and check-in in Daily Speaking Practice; the bot tags English voice notes `#english-practice`. Done 2026-10-03. Adding the habit in the habit tracker app is left to the user (needs their login).
 - [x] **Link-only notes:** `sellable ideas` and `youtube channels` re-processed from the Inbox as sources, distilled into new notes. Done 2026-10-03.
 
@@ -37,7 +38,7 @@ Proposed improvements to the vault system, most important first. Agents: when an
 - [x] Health check for the bot (heartbeat file, local check every 2 min, no tokens). Done 2026-10-03.
 - [x] Docker Desktop starts when you sign in (turned on by the user, verified: `AutoStart` on, both containers `restart: unless-stopped`). Done 2026-10-03.
 - [x] Backup image adds tzdata (logs in local time; history names stay UTC) and zip: history is stored as `history/<date>.zip`. Done 2026-10-03.
-- [ ] **Docker Desktop reliability on Windows.** On 2026-10-04 it didn't start at sign-in (Run entry present, StartupApproved bytes all zero), then crashed on stale sockets. Fix with `scripts/windows/start-docker.ps1`; **user action:** check Task Manager → Startup apps and decide whether the script replaces Docker's own startup entry.
+- [ ] **Docker Desktop reliability on Windows.** On 2026-10-04 it didn't start at sign-in and later crashed on stale sockets. On 2026-10-05 no Docker startup registration was present, so `Start Docker for Vault.lnk` was added to the user's Startup folder to run `scripts/windows/start-docker.ps1`. Still needs verification after sign-in: Docker Desktop exited during this session and the Docker engine pipe remained unavailable, so the bot container is not confirmed running.
 - [ ] **Stray app copy in the vault.** A clone of the habit tracker app sits in a folder literally named `%USERPROFILE%` at the vault root, probably from a command that didn't expand the path. It is backed up to Drive and shows as untracked in git. Decide where it belongs (e.g. `~/Documents/everyday-habit-tracker`) and move it, or add it to `.gitignore` and the backup excludes.
 
 ## 8. Habit tracker × LLM wiki (to think through)
@@ -49,6 +50,10 @@ Proposed improvements to the vault system, most important first. Agents: when an
   - **What the combination gives:** goals with evidence; notes that are tested against real behaviour, not just collected; and a single place to ask "how am I doing on X and what should I change?"
   - **Two connections to design.** (1) **Bot → habit tracker**: check-ins from Telegram (`/did <habit>`, shown as "coming soon" in `/help`), and an English voice note ticks "English speaking" automatically. (2) **Wiki ↔ habit tracker**: the agent reads streaks for the weekly review and the morning brief, and habits link to the notes that explain them. Both need an API (token or webhook) on the app.
   - **Third connection (user request 2026-10-04): Google Calendar.** Add events and reminders to Google Calendar straight from the bot or the vault (e.g. `/event …`), and let the agent see upcoming events for the brief and planning. Needs a Google Calendar API OAuth client, which could reuse the user's own Google Cloud project planned for rclone.
+  - [x] **Wiki ← habit tracker, read-only: done 2026-10-05.** The app has `GET /api/integration/habits` (token, read-only); `scripts/habits.py` writes [[Habit Consistency]] and feeds the brief, `/habits` and the Sunday review. Weekly targets live in Discipline's *Habits in the app* table until the app supports weekly habits. Still open: connection 1 (bot → app check-ins, needs a write endpoint) and Google Calendar.
+  - **Prerequisite done (2026-10-05):** password reset in the app ("Forgot your password?"), so the agent can read the user's habits via `/api/data` in their logged-in browser.
+  - **App change needed first: weekly habits.** The app is daily-only: completion, the heatmap, insights and reminders are all per day. Design: `habits.frequency` (`daily`/`weekly`) + `weekly_target`. A weekly habit shows "n of 3 this week" and is left out of daily ratios; insights count weeks on target. Optional "remind me only when falling behind" reminders. One migration, no new services.
+  - **Constraint (user, 2026-10-04): everything stays on free tiers**: Vercel Hobby, Neon Free, Upstash QStash free, Google APIs with no billing. Event-driven calls only, no polling (Neon scales to zero), no new paid services, and the Neon password never leaves Vercel (the bot uses its own API token).
   - **Open questions:** Which direction does data flow (app → wiki, wiki → app, or both)? Where does tracker data live, given notes are private and backed up to Drive? Is the zero-token rule kept (scripts sync the data, and the LLM only reviews)? Does the app expose an API, or does it need one?
 
 ## 10. Seeing video content

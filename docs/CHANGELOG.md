@@ -2,6 +2,16 @@
 
 Changes to the vault **system**: scripts, Docker, agent rules. Note-level operations are in `log.md`, which is personal and not committed. Pending ideas are in [BACKLOG.md](BACKLOG.md).
 
+## 2026-10-05
+
+### Habit consistency from the habit tracker app
+- New `scripts/habits.py` (standard library, zero tokens). It reads the habit tracker's read-only endpoint (`GET /api/integration/habits`, bearer token in `HABITS_API_TOKEN`, URL in `HABITS_API_URL`), scores each habit against its target, and writes `02 - Areas/Discipline/Habit Consistency.md`. That note shows this week, the last 7 and 28 days, streaks, a weekly history, and the habits that need attention, each with its fix. Targets and fixes come from a new *Habits in the app* table in `Discipline`: "every day", "workdays" or "N× a week", with an optional start date, so weekly habits such as Strength aren't counted as missed on rest days. 🔴 means under 60%, or missed twice in a row. The last good response is cached in `scripts/habits.cache.json` (git-ignored), which is used when the app can't be reached.
+- Bot: the morning brief adds yesterday's habits and up to two slipping habits with their fix; the Sunday review adds this week's counts per habit and the one most worth fixing; new `/habits` command. Without the two env vars, all of this stays off.
+- `AGENTS.md`: Habit Consistency is generated; at each organize and weekly review the agent rewrites the fix of a habit that stays 🔴.
+
+### Windows bot startup
+- Added `Start Docker for Vault.lnk` to this Windows user's Startup folder to run `scripts/windows/start-docker.ps1` at sign-in; no Docker startup entry was present. Docker Desktop exited during verification, so container startup remains to be confirmed.
+
 ## 2026-10-02
 
 ### Git security review
@@ -104,3 +114,7 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 - `AGENTS.md`: the user approved this on 2026-10-04 for videos whose transcript and caption don't name the content. Sheets are deleted after viewing, and nothing visual is stored in the vault.
 - `reel_frames.py --frames N` for dense sampling (e.g. 60 frames over 16 s). The AGENTS.md rule notes `MSYS_NO_PATHCONV=1` for the cleanup, which Git Bash had silently skipped.
 - `reel_frames.py --segment label:start-end --size N`: one collage per time range (e.g. per exercise) from a single download. `AGENTS.md` exception: frames may be stored in a note's `Attachments/` when the user asks for them.
+
+### Bot: training
+- `/train` (`/train 1`, `/train 2`): the next training session, exercise by exercise, read from the routine canvas's Day 1 / Day 2 cards. "Next" is the opposite of the last session in the strength log's session table.
+- The morning brief adds a training line: the next session, this week's sessions out of the routine's `target_per_week`, the last session, a nudge after 3+ days without one, or the start date before `start:`.
