@@ -279,10 +279,24 @@ def session_plan(day):
 
 
 def brief_text(today=None, habit_lines=None):
-    """habit_lines: from habits.brief_lines (the habit tracker app), placed after the training line."""
+    """habit_lines: from habits.brief_lines (the habit tracker app). With them the brief is short: the day's focus
+    first, then training, English and one correction; tasks and the rest are behind the brief's buttons."""
     today = today or date.today()
     weekday = today.weekday() < 5
     lines = [f"☀️ Good morning! {today:%A %d %B}"]
+    if habit_lines:
+        lines += ["", *habit_lines]
+        if ROUTINE.exists():
+            lines.append("\n" + training_line(today).replace(" /train shows it.", ""))
+        if weekday:
+            lines.append("🎙 English: one voice note about your workday, after work.")
+        tip = correction_of_the_day(today)
+        if tip:
+            lines.append(f"🔁 {tip}")
+        for name, days in deadlines(today):
+            if days >= 0:
+                lines.append(f"⏳ {name}: {days} days left")
+        return "\n".join(lines)
     rows = minimums()
     fm, _ = frontmatter(read(DISCIPLINE)) if DISCIPLINE.exists() else (None, "")
     try:
@@ -311,8 +325,6 @@ def brief_text(today=None, habit_lines=None):
             lines.append(f"⏳ {name}: {days} days left")
     if ROUTINE.exists():
         lines.append("\n" + training_line(today))
-    if habit_lines:
-        lines.append("\n" + "\n".join(habit_lines))
     tip = correction_of_the_day(today)
     if tip:
         lines.append(f"\n🔁 Review this correction:\n{tip}")

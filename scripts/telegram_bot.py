@@ -21,6 +21,7 @@ Run: python scripts/telegram_bot.py
 import json, os, re, sys, time, html, secrets, shutil, tempfile, threading, urllib.request, urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import coach
 import companion
 import habits
 
@@ -565,6 +566,11 @@ def handle(msg):
             break
     if "photo" in msg:
         media = ("photo", msg["photo"][-1])
+    if context and context.get("kind") == "reason":
+        save_reason(chat, context, text, media, stamp)
+        return
+    if not context and not media and quick_log(chat, text):
+        return
 
     status = None       # "working…" message, edited into the result
     check = text        # the user's own words, checked for secrets before saving
@@ -667,6 +673,72 @@ def handle(msg):
     if context:
         apply_context(item, context)
     finish(chat, item, check, status)
+    auto_tick(chat, item)
+
+
+# ---------- habit tracker: log, tick, reasons ----------
+def quick_log(chat, text):
+    """A short message naming one habit ("water 500", "did mobility") logs it in the app. True when it did."""
+    if not text or not habits.configured():
+        return False
+    rep = coach.report()
+    found = coach.parse(text, rep) if rep else None
+    if not found:
+        return False
+    s, value = found
+    try:
+        entry, created = coach.log(s, value, note=None)
+    except Exception as e:
+        reply(chat, f"⚠️ Couldn't log {s['name']} in the app ({e}). Saving your message as a note instead.")
+        return False
+    buttons = None
+    if created and entry:
+        logged = STATE.setdefault("logged", {})
+        logged[entry["id"]] = text
+        for k in list(logged)[:-50]:
+            del logged[k]
+        companion.save_state(STATE)
+        buttons = [("↩️ Undo", f"hu:{entry['id']}"), ("📝 It was a note", f"hn:{entry['id']}")]
+    reply(chat, coach.logged_text(s, value, created), buttons=buttons)
+    return True
+
+
+def auto_tick(chat, item):
+    """A Workout note ticks the strength habit; an English voice note ticks the English one."""
+    if not habits.configured():
+        return
+    words = f"{item.get('title', '')}\n{item.get('body', '')}".lstrip().lower()
+    alias = "workout" if re.match(r"(?:!\[\[[^\]]*\]\]\s*(?:## transcript\s*)?)?workout\b", words) else \
+        "#english-practice" if "english-practice" in item.get("tags", []) else None
+    if not alias:
+        return
+    try:
+        s = coach.by_alias(alias, coach.report())
+        if s and not s["done_today"]:
+            entry, created = coach.log(s, 1)
+            if created:
+                reply(chat, coach.logged_text(s, 1, created) + " (from your note)")
+    except Exception as e:
+        print("auto tick failed:", e)
+
+
+def save_reason(chat, context, text, media, stamp):
+    """A reply to "what got in the way?": text, or a voice note transcribed, goes to Habit Reasons."""
+    said = text
+    if media and media[0] in AUDIO_KINDS:
+        f = download(media[1]["file_id"], STAGE, f"tg-{stamp}")
+        try:
+            said, _ = transcribe(f, allowed_languages=("es", "en"))
+        finally:
+            Path(f).unlink(missing_ok=True)
+    if not said or not said.strip():
+        reply(chat, "I couldn't get any words from that. Reply again with text?")
+        return
+    if sensitive_hits(said):
+        reply(chat, "That looks like it holds a secret, so I didn't save it.")
+        return
+    coach.add_reason(context["habits"], said, context.get("type", "skipped"), date.fromisoformat(context["day"]))
+    reply(chat, f"🗣 Noted under {', '.join(context['habits'])} in Habit Reasons. The weekly review uses it to pick the next fix.")
 
 
 def apply_context(item, context):
@@ -793,32 +865,62 @@ def handle_button(query):
             reply(chat, f"✅ Done: {companion.plain(task)}", message_id)
         else:
             reply(chat, "That task changed or was already ticked. Try /done again.", message_id)
+    elif action == "cmd" and arg in ("train", "habits", "todo", "q"):
+        command(chat, f"/{arg}")
+    elif action in ("hd", "hs"):
+        coach.report()
+        s = coach.find(arg)
+        if not s:
+            reply(chat, "That habit isn't in the app anymore, or the app can't be reached right now.")
+        elif action == "hd":
+            try:
+                value, _ = habits.remaining(s)
+                entry, created = coach.log(s, value)
+                buttons = [("↩️ Undo", f"hu:{entry['id']}")] if created and entry else None
+                reply(chat, coach.logged_text(s, value, created), buttons=buttons)
+            except Exception as e:
+                reply(chat, f"⚠️ Couldn't log it in the app: {e}")
+        else:
+            coach.skip(STATE, s["id"])
+            companion.save_state(STATE)
+            sent = reply(chat, f"⏭ {s['icon']} {s['name']} skipped today, so no more reminders for it.\n"
+                               "↩️ What got in the way? Reply to this message (voice is fine). It's how the fixes get better.")
+            remember(sent, {"kind": "reason", "habits": [s["name"]], "type": "skipped", "day": date.today().isoformat()})
+    elif action == "hz":
+        coach.snooze(STATE)
+        companion.save_state(STATE)
+        reply(chat, f"😴 Quiet for {coach.SNOOZE_HOURS} hours. Then I'll ask again.", message_id)
+    elif action in ("hu", "hn"):
+        try:
+            habits.undo_entry(arg)
+            coach._cache["at"] = 0  # re-read the app next time
+            text = STATE.get("logged", {}).pop(arg, None)
+            companion.save_state(STATE)
+            if action == "hn" and text:
+                finish(chat, {"title": text.split("\n")[0], "body": text, "source": "telegram", "tags": ["telegram"]}, text)
+            else:
+                reply(chat, "↩️ Undone: removed from the app.", message_id)
+        except Exception as e:
+            reply(chat, f"⚠️ Couldn't undo it in the app: {e}")
+    elif action == "rv":
+        proposal = STATE.pop("review_proposal", None)
+        companion.save_state(STATE)
+        if proposal:
+            coach.approve(proposal)
+            reply(chat, f"✅ Next week's one change: {proposal['habit']}. It's in your Discipline review log.", message_id)
+        else:
+            reply(chat, "That proposal was already handled.", message_id)
 
 
 # ---------- commands ----------
-HELP = """🤖 What I can do
+HELP = """🤖 How I work
 
-Send anything (text, a link, a voice note, a photo, a file) and it lands in your Inbox.
-↩️ Reply to a "Saved" message to add to that same note instead of making a new one.
+📥 Send anything (text, link, voice, photo, file): it lands in your Inbox. Reply to a "Saved" message to add to it.
+✅ Log a habit by saying it: "water 500", "did mobility", "read 20 min". A "Workout…" note ticks strength; an English voice note ticks English.
+⏰ I push you: after your app's reminder, I nag about what's still open, then a check-in at night. ⏭ Skip asks what got in the way.
+☀️ Every morning: one focus, with buttons for training, habits, tasks and a question. Sunday: the review, with one change to approve.
 
-/todo: this week's pending tasks
-/add <task>: add a task to your Pending Tasks list
-/done <words>: tick off a task (no words: pick from a list)
-/q: the next unanswered question about you. Reply to it to answer (an English voice note is best)
-/standup: tell me your workday in English. Corrections come at the next organize
-/train: your next training session (Day 1 or 2), exercise by exercise. /train 1 or /train 2 for a specific day
-/habits: how consistent you are this week with the habits in your habit tracker app, and what to fix
-/brief: the morning brief, now
-/review: the weekly review, now
-/inbox: what's waiting in the Inbox
-/status: bot health and last backup
-/backup: back up to Google Drive now
-/help: this message
-
-🔜 Coming soon
-/ask <question>: answer from your wiki, with the notes it used
-/organize: process the Inbox from your phone
-/did <habit>: tick a habit in your habit tracker app
+Also: /add <task>, /done <task>, /standup, /review, /status, /backup.
 
 ⏰ {schedule}"""
 
@@ -828,15 +930,10 @@ SOON = {
     "/organize": "🔜 /organize is coming soon.\nIt will process the Inbox the way you now ask for it in chat: file each raw capture, "
                  "write the distilled notes, add English corrections from standups, update the indexes and the log, and send you a "
                  "summary. It will ask for confirmation first, because it spends tokens.",
-    "/did": "🔜 /did is coming soon.\nIt will tick a habit in your habit tracker app (e.g. /did mobility), and an English voice note "
-            "will tick \"English speaking\" by itself. The app's API is read-only for now (it feeds /habits); this needs it to accept entries.",
 }
 
-COMMANDS = [("todo", "This week's pending tasks"), ("add", "Add a pending task"), ("done", "Tick off a task"),
-            ("q", "Next question about you"), ("standup", "Today's standup in English"), ("train", "Next training session"), ("habits", "Habit consistency this week"), ("brief", "Morning brief now"),
-            ("review", "Weekly review now"), ("inbox", "What's in the Inbox"), ("status", "Bot health and last backup"),
-            ("backup", "Back up now"), ("help", "All commands"), ("ask", "Coming soon: ask your wiki"),
-            ("organize", "Coming soon: process the Inbox"), ("did", "Coming soon: tick a habit")]
+COMMANDS = [("brief", "Today: focus, training, habits"), ("standup", "Today's standup in English"),
+            ("review", "Weekly review now"), ("help", "How the bot works")]
 
 
 def schedule_text():
@@ -845,6 +942,8 @@ def schedule_text():
         parts.append(f"Every morning at {BRIEF_TIME}: your brief.")
     if REVIEW_TIME.lower() != "off":
         parts.append(f"{REVIEW_TIME.split()[0]}days at {REVIEW_TIME.split()[-1]}: the weekly review.")
+    if habits.configured() and coach.NAG_EVERY > 0:
+        parts.append(f"Habit nags every {coach.NAG_EVERY} min after each app reminder until {coach.NAG_UNTIL}; check-in at {coach.CHECKIN_TIME}.")
     return " ".join(parts) or "No scheduled messages."
 
 
@@ -872,23 +971,45 @@ def habit_report():
     if not habits.configured():
         return None
     try:
-        rep, error = habits.refresh()
-        if error:
-            print("habit tracker:", error)
-        return rep
+        return coach.report(max_age=60)
     except Exception as e:  # never let the app break the brief or the review
         print("habit report failed:", e)
         return None
 
 
-def brief_text():
+BRIEF_BUTTONS = [[("🏋️ Training", "cmd:train"), ("📊 Habits", "cmd:habits")], [("📌 Tasks", "cmd:todo"), ("❓ A question", "cmd:q")]]
+
+
+def send_brief(chat):
+    """The morning brief. Replying to it answers "what got in the way?" for yesterday's misses."""
     rep = habit_report()
-    return companion.brief_text(habit_lines=habits.brief_lines(rep) if rep else None)
+    sent = reply(chat, companion.brief_text(habit_lines=habits.brief_lines(rep) if rep else None)
+                 + ("\n\n↩️ Missed something yesterday? Reply with what got in the way." if rep else ""), buttons=BRIEF_BUTTONS)
+    if rep:
+        yesterday = rep["today"] - timedelta(days=1)
+        missed = [s["name"] for s in rep["habits"] if s["per_week"] == 7 and s["active_yesterday"] and not s["done_yesterday"]]
+        if missed:
+            remember(sent, {"kind": "reason", "habits": missed, "type": "missed", "day": yesterday.isoformat()})
+    return sent
 
 
 def send_review(chat):
     rep = habit_report()
-    remember(reply(chat, companion.review_text(habit_lines=habits.review_lines(rep) if rep else None)), {"kind": "review"})
+    proposal, buttons, lines = None, None, None
+    if rep:
+        lines, proposal = coach.review_lines(rep)
+    if proposal:
+        STATE["review_proposal"] = proposal
+        companion.save_state(STATE)
+        buttons = [("✅ Use this change", "rv:")]
+    remember(reply(chat, companion.review_text(habit_lines=lines), buttons=buttons), {"kind": "review"})
+
+
+def send_coach(chat):
+    """Nags and the evening check-in from coach.tick."""
+    for text, buttons in coach.tick(STATE):
+        reply(chat, text, buttons=buttons)
+    companion.save_state(STATE)
 
 
 def command(chat, text):
@@ -945,7 +1066,7 @@ def command(chat, text):
             rep = habit_report()
             reply(chat, habits.week_text(rep) if rep else "📊 The habit tracker app couldn't be reached, and there's no saved copy yet.")
     elif cmd == "/brief":
-        reply(chat, brief_text())
+        send_brief(chat)
     elif cmd == "/review":
         send_review(chat)
     elif cmd == "/inbox":
@@ -986,9 +1107,10 @@ def scheduled():
         return
     try:
         period = due(BRIEF_TIME, "brief", 3)
-        if period and reply(OWNER, brief_text()):
+        if period and send_brief(OWNER):
             STATE["brief"] = period
             companion.save_state(STATE)
+        send_coach(OWNER)
         period = due(REVIEW_TIME, "review", 6)
         if period:
             send_review(OWNER)

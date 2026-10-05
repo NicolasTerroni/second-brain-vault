@@ -17,6 +17,7 @@ except ImportError:  # Python 3.8: dates in the host's local time
 SCRIPTS = Path(__file__).resolve().parent
 DISCIPLINE = ROOT / "02 - Areas" / "Discipline" / "Discipline.md"
 REPORT = ROOT / "02 - Areas" / "Discipline" / "Habit Consistency.md"
+LOG = ROOT / "02 - Areas" / "Discipline" / "Habit Log.md"
 CACHE = SCRIPTS / "habits.cache.json"   # last API response, used when the app can't be reached (git-ignored)
 TARGETS = "## Habits in the app"
 HISTORY_DAYS = 364
@@ -93,8 +94,12 @@ def parse_target(text):
     return max(1, min(per_week, 7)), date.fromisoformat(since.group(0)) if since else None
 
 
+def default_goal(name):
+    return {"per_week": 7, "since": None, "workdays": False, "tip": "", "goal": "", "aliases": [key(name)]}
+
+
 def targets():
-    """{habit key: {per_week, since, tip}} from the 'Habits in the app' table in Discipline."""
+    """{habit key: {per_week, since, workdays, tip, goal, aliases}} from the 'Habits in the app' table in Discipline."""
     out, inside, header = {}, False, None
     for line in read(DISCIPLINE).splitlines() if DISCIPLINE.exists() else []:
         if line.startswith("## "):
@@ -107,8 +112,12 @@ def targets():
                 continue
             row = dict(zip(header, cells))
             per_week, since = parse_target(row.get("target", ""))
-            out[key(row.get("app habit", ""))] = {"per_week": per_week, "since": since,
-                                                   "tip": plain(row.get("when it slips, try", ""))}
+            name = key(row.get("app habit", ""))
+            said = [a.strip().lower() for a in plain(row.get("also called", "")).split(",") if a.strip() not in ("", "–", "-")]
+            goal = row.get("goal", "").strip()
+            out[name] = {"per_week": per_week, "since": since, "workdays": "workday" in row.get("target", "").lower(),
+                         "tip": plain(row.get("when it slips, try", "")),
+                         "goal": "" if goal in ("", "–", "-", "?") else goal, "aliases": [name, *said]}
     return out
 
 
@@ -134,10 +143,13 @@ def score_habit(habit, totals, goal, today):
     per_week = goal["per_week"]
     active = lambda d: start <= d <= end  # noqa: E731
     yesterday = today - timedelta(days=1)
-    s = {"name": habit["name"], "icon": habit.get("icon") or "", "per_week": per_week, "target": target,
-         "unit": habit.get("unit") or "", "type": habit["type"], "tip": goal["tip"], "start": start,
+    s = {"id": habit["id"], "name": habit["name"], "icon": habit.get("icon") or "", "per_week": per_week,
+         "workdays": goal["workdays"], "target": target, "unit": habit.get("unit") or "", "type": habit["type"],
+         "tip": goal["tip"], "goal": goal["goal"], "aliases": goal["aliases"], "start": start,
+         "active_today": active(today) and not habit["_archived"], "today_value": totals.get(today, 0),
+         "typical": habit["_typical"], "reminder": habit["_reminder"],
          "ever": bool(totals), "done_today": today in done, "done_yesterday": yesterday in done,
-         "active_yesterday": active(yesterday), "last_done": max(done) if done else None}
+         "active_yesterday": active(yesterday), "last_done": max((d for d in done if d >= start), default=None)}
 
     def daily_rate(days):
         window = [yesterday - timedelta(days=i) for i in range(days)]
@@ -246,20 +258,31 @@ def report(data, today=None):
     tz = tz_of(data.get("timezone") or "Europe/Rome")
     today = today or (datetime.now(tz).date() if tz else date.today())
     goals = targets()
-    totals = {}
+    totals, amounts, notes = {}, {}, []
     for e in data.get("entries", []):
         day = local_day(e["timestamp"], tz)
         per = totals.setdefault(e["habitId"], {})
         per[day] = per.get(day, 0) + float(e["value"])
+        amounts.setdefault(e["habitId"], []).append(float(e["value"]))
+        if e.get("note"):
+            notes.append((day, e["habitId"], e["note"]))
+    first_reminder = {}
+    for r in data.get("reminders", []):
+        if r.get("enabled") and r.get("startTime"):
+            first_reminder[r["habitId"]] = min(first_reminder.get(r["habitId"], "99:99"), r["startTime"][:5])
     scored = []
     for h in sorted(data.get("habits", []), key=lambda h: (h.get("sortOrder") or 0, h.get("createdAt") or "")):
+        values = amounts.get(h["id"], [])
         h = dict(h, _created=local_day(h["createdAt"], tz),
-                 _archived=local_day(h["archivedAt"], tz) if h.get("archivedAt") else None)
+                 _archived=local_day(h["archivedAt"], tz) if h.get("archivedAt") else None,
+                 _typical=max(set(values), key=values.count) if values else None,  # the amount usually logged
+                 _reminder=first_reminder.get(h["id"]))
         if h["_archived"] and h["_archived"] < today - timedelta(days=28):
             continue
-        goal = goals.get(key(h["name"]), {"per_week": 7, "since": None, "tip": ""})
+        goal = goals.get(key(h["name"])) or default_goal(h["name"])
         scored.append(score_habit(h, totals.get(h["id"], {}), goal, today))
-    return {"today": today, "habits": [s for s in scored if s["start"] <= today]}
+    return {"today": today, "habits": [s for s in scored if s["start"] <= today],
+            "totals": totals, "notes": notes, "tz": tz}
 
 
 def attention(rep, limit=None):
@@ -269,7 +292,7 @@ def attention(rep, limit=None):
     return bad[:limit] if limit else bad
 
 
-# ---------- the note ----------
+# ---------- the notes ----------
 def cell(s, period):
     hits, n = s[period]
     if s["per_week"] == 7:
@@ -277,28 +300,34 @@ def cell(s, period):
     return f"{hits} of {fmt(n)} ({pct(min(1, hits / n))})" if n >= 1 else f"{hits}"
 
 
+def _created(path, today):
+    if path.exists():
+        fm, _ = frontmatter(read(path))
+        return str((fm or {}).get("created") or today)[:10]
+    return today.isoformat()
+
+
+def _header(path, today, summary):
+    return ["---", f"created: {_created(path, today)}", "type: note", "status: active", "tags: [area/discipline, habit]",
+            "source: Everyday habit tracker app, generated by scripts/habits.py", "---", summary, ""]
+
+
 def write_note(rep, fetched=None, error=None):
     today = rep["today"]
-    created = today.isoformat()
-    if REPORT.exists():
-        fm, _ = frontmatter(read(REPORT))
-        created = str((fm or {}).get("created") or created)[:10]
-    lines = ["---", f"created: {created}", "type: note", "status: active", "tags: [area/discipline, habit]",
-             "source: Everyday habit tracker app, generated by scripts/habits.py", "---",
-             "How consistent you are with each habit in your habit tracker app, scored against the targets in "
-             "[[Discipline#Habits in the app]]. Generated by `scripts/habits.py` every morning with the brief; don't edit it by hand.",
-             "",
-             f"Updated {datetime.now():%Y-%m-%d %H:%M}" + (f" · ⚠️ the app couldn't be reached, data from {fetched}" if error else "")
-             + f" · ✅ {pct(SOLID)} or more · 🟡 {pct(OK)}–{pct(SOLID)} · 🔴 under {pct(OK)}, or missed twice in a row "
-               "(for weekly habits: under target two weeks running, or this week can't be reached without training every day left)",
-             "", f"## This week ({monday(today):%a %d %b} – {today:%a %d %b})",
-             "| Habit | Target | This week | Last 7 days | Last 28 days | Streak | Status |", "|---|---|---|---|---|---|---|"]
+    lines = _header(REPORT, today, "How consistent you are with each habit in your habit tracker app, scored against the targets "
+                    "in [[Discipline#Habits in the app]]. Generated by `scripts/habits.py` whenever the bot reads the app; don't edit it by hand.")
+    lines += [f"Updated {datetime.now():%Y-%m-%d %H:%M}" + (f" · ⚠️ the app couldn't be reached, data from {fetched}" if error else "")
+              + f" · ✅ {pct(SOLID)} or more · 🟡 {pct(OK)}–{pct(SOLID)} · 🔴 under {pct(OK)}, or missed twice in a row "
+                "(for weekly habits: under target two weeks running, or this week can't be reached without training every day left). "
+                "Every day's values and notes: [[Habit Log]]. Why you skip: [[Habit Reasons]].",
+              "", f"## This week ({monday(today):%a %d %b} – {today:%a %d %b})",
+              "| Habit | Goal | Target | This week | Last 7 days | Last 28 days | Streak | Status |", "|---|---|---|---|---|---|---|---|"]
     for s in rep["habits"]:
         week = s["week"]
         this_week = (f"{week[0]}/{week[1]} days" if s["per_week"] == 7 else f"{week[0]}/{week[1]}") if week[1] else "–"
         avg = f" · avg {fmt(s['avg'])} {s['unit']}" if s["avg"] is not None else ""
-        lines.append(f"| {s['icon']} {s['name']} | {target_text(s)} | {this_week} | {cell(s, 'd7')}{avg} | {cell(s, 'd28')} "
-                     f"| {s['streak']} | {s['status']} |")
+        lines.append(f"| {s['icon']} {s['name']} | {s['goal'].replace('|', chr(92) + '|') or '❔ none'} | {target_text(s)} | {this_week} "
+                     f"| {cell(s, 'd7')}{avg} | {cell(s, 'd28')} | {s['streak']} | {s['status']} |")
     lines += ["", "## Needs attention"]
     bad = attention(rep)
     if bad:
@@ -323,24 +352,140 @@ def write_note(rep, fetched=None, error=None):
     REPORT.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
+def write_log(rep):
+    """Habit Log: every day's values from the app, newest first, with the notes you wrote on entries."""
+    today, habits = rep["today"], rep["habits"]
+    lines = _header(LOG, today, "Every day in your habit tracker app: what you logged for each habit, and the notes you wrote "
+                    "on entries. Generated by `scripts/habits.py`; don't edit it by hand. Scores: [[Habit Consistency]].")
+    first = min((s["start"] for s in habits), default=today)
+    notes = {}
+    names = {s["id"]: s["name"] for s in habits}
+    for day, habit_id, note in rep["notes"]:
+        notes.setdefault(day, []).append(f"{names.get(habit_id, 'archived habit')}: {note}")
+    lines += ["✅ done · a number is the amount logged (bold when it met the target) · · not done · blank: the habit didn't exist yet", "",
+              "| Date | " + " | ".join(f"{s['icon']} {s['name']}" for s in habits) + " | Notes |",
+              "|---|" + "---|" * len(habits) + "---|"]
+    day = today
+    while day >= first:
+        row = []
+        for s in habits:
+            value = rep["totals"].get(s["id"], {}).get(day, 0)
+            if day < s["start"]:
+                row.append("")
+            elif s["type"] == "boolean":
+                row.append("✅" if value else "·")
+            elif value:
+                row.append(f"**{fmt(value)}**" if s["target"] and value >= s["target"] else fmt(value))
+            else:
+                row.append("·")
+        text = "; ".join(notes.get(day, [])).replace("|", "/").replace("\n", " ")
+        lines.append(f"| {day:%a %d %b %Y} | " + " | ".join(row) + f" | {text} |")
+        day -= timedelta(days=1)
+    lines += ["", "Related: [[Discipline]], [[Habit Reasons]]."]
+    LOG.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+# ---------- today, for the bot's check-ins ----------
+def remaining(s):
+    """What's left today: (value to log for 'done', label)."""
+    if s["type"] == "boolean" or not s["target"]:
+        return 1, ""
+    left = max(s["target"] - s["today_value"], 0)
+    if s["type"] == "quantity":
+        step = s["typical"] or s["target"] / 4
+        return min(step, left) or step, f"{fmt(s['today_value'])}/{fmt(s['target'])} {s['unit']}"
+    return left or s["target"], f"{fmt(s['today_value'])}/{fmt(s['target'])} {s['unit']}"
+
+
+def is_open(s, today):
+    """Still to do today. Weekly habits only when the week needs it: at risk, or 2+ days since the last session."""
+    if not s["active_today"] or s["done_today"]:
+        return False
+    if s["per_week"] == 7:
+        return True
+    if s["workdays"]:
+        return today.weekday() < 5
+    count, need = s["week"]
+    if count >= need:
+        return False
+    return s.get("at_risk") or not s["last_done"] or (today - s["last_done"]).days >= 2
+
+
+def open_today(rep):
+    return [s for s in rep["habits"] if is_open(s, rep["today"])]
+
+
+def item_line(s):
+    _, label = remaining(s)
+    extra = label or (f"{s['week'][0]}/{s['week'][1]} this week" if s["per_week"] < 7 and not s["workdays"] else "")
+    alarm = " 🔴 missed twice, don't make it three" if s["missed_twice"] else " ⚠️ week at risk" if s.get("at_risk") else ""
+    return f"{s['icon']} {s['name']}" + (f" · {extra}" if extra else "") + alarm
+
+
+def done_button(s):
+    value, _ = remaining(s)
+    amount = f" {fmt(value)} {s['unit']}" if s["type"] != "boolean" and s["unit"] else ""
+    return f"✅ {s['name'][:18]}{amount}", value
+
+
+# ---------- writes (the bot logs entries) ----------
+def _call(method, path, body=None):
+    url, token = env("HABITS_API_URL"), env("HABITS_API_TOKEN")
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = Request(f"{url.rstrip('/')}{path}", data=data, method=method,
+                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "User-Agent": "vault-bot"})
+    with urlopen(request, timeout=20) as response:
+        raw = response.read().decode("utf-8")
+        return json.loads(raw) if raw else None
+
+
+def log_entry(habit_id, value=1, note=None):
+    """Log an entry in the app. Returns the entry, with created=False when a yes/no habit was already done today."""
+    body = {"habitId": habit_id, "value": value}
+    if note:
+        body["note"] = note[:1000]
+    return _call("POST", "/api/integration/entries", body)
+
+
+def undo_entry(entry_id):
+    _call("DELETE", f"/api/integration/entries?id={entry_id}")
+
+
 # ---------- chat text (telegram_bot.py) ----------
 def refresh(today=None):
-    """Fetch, score and write the note. (report, error) with report None when there is no data at all."""
+    """Fetch, score and write the notes. (report, error) with report None when there is no data at all."""
     data, fetched, error = load(today or date.today())
     if data is None:
         return None, error
     rep = report(data, today)
     rep["fetched"], rep["error"] = fetched, error
     write_note(rep, fetched, error)
+    write_log(rep)
     return rep, error
+
+
+def focus(rep):
+    """The one habit to win today: the worst slipping one, else the weakest open one."""
+    bad = attention(rep)
+    if bad:
+        return bad[0]
+    weak = sorted(open_today(rep), key=lambda s: s["rate"] if s["rate"] is not None else 1)
+    return weak[0] if weak else None
 
 
 def brief_lines(rep):
     daily = [s for s in rep["habits"] if s["per_week"] == 7 and s["active_yesterday"]]
     missed = [s["name"] for s in daily if not s["done_yesterday"]]
-    lines = [f"📊 Habits yesterday: {len(daily) - len(missed)}/{len(daily)} done" + (f" (missed: {', '.join(missed)})" if missed else " 🎉")]
-    for s in attention(rep, 2):
-        lines.append(f"🔴 {s['name']}: {s['why']}." + (f"\n   Try: {s['tip']}" if s["tip"] else ""))
+    lines = [f"📊 Yesterday: {len(daily) - len(missed)}/{len(daily)}" + (f" (missed: {', '.join(missed)})" if missed else " 🎉")]
+    f = focus(rep)
+    if f:
+        lines.append(f"🎯 Today's focus: {f['icon']} {f['name']}. {f['why'][:1].upper() + f['why'][1:]}." if f["status"] == "🔴"
+                     else f"🎯 Today's focus: {f['icon']} {f['name']}.")
+        if f["tip"]:
+            lines.append(f"👉 {f['tip']}")
+    others = [s["name"] for s in attention(rep) if s is not f]
+    if others:
+        lines.append("Also slipping: " + ", ".join(others))
     if rep.get("error"):
         lines.append(f"⚠️ The habit app couldn't be reached; this is data from {rep['fetched']}.")
     return lines
@@ -351,24 +496,25 @@ def week_text(rep):
     for s in rep["habits"]:
         week = s["week"]
         done = f"{week[0]}/{week[1]}" + (" days" if s["per_week"] == 7 else "") if week[1] else "not done today yet"
-        lines.append(f"{s['status']} {s['icon']} {s['name']}: {done} · last 28 days {pct(s['rate']) if s['rate'] is not None else '–'}")
-    bad = attention(rep)
-    if bad:
-        lines.append("\nNeeds attention:")
-        lines += [f"• {s['name']}: {s['why']}." + (f" Try: {s['tip']}" if s["tip"] else "") for s in bad]
-    lines.append("\nFull table: Habit Consistency in your Discipline area.")
+        lines.append(f"{s['status']} {s['icon']} {s['name']}: {done} · 28 days {pct(s['rate']) if s['rate'] is not None else '–'}")
+    lines.append("\nDetails: Habit Consistency and Habit Log in your Discipline area.")
     return "\n".join(lines)
 
 
-def review_lines(rep):
-    lines = ["\n📊 Your habits this week (from the app):"]
+def by_goal(rep):
+    """[(goal, [scores])] in first-seen order; habits without a goal last, under ''."""
+    groups = {}
     for s in rep["habits"]:
-        week = s["week"]
-        lines.append(f"{s['status']} {s['name']}: {week[0]}/{week[1]}" + (" days" if s["per_week"] == 7 else ""))
-    worst = attention(rep, 1)
-    if worst:
-        s = worst[0]
-        lines.append(f"\nThe one most worth fixing: {s['name']} ({s['why']})." + (f"\nIdea: {s['tip']}" if s["tip"] else ""))
+        groups.setdefault(plain(s["goal"]), []).append(s)
+    return sorted(groups.items(), key=lambda g: g[0] == "")
+
+
+def review_lines(rep):
+    lines = ["\n📊 This week, by goal (from the app):"]
+    for goal, items in by_goal(rep):
+        counts = ", ".join(f"{s['status']} {s['name']}" + (f" {s['week'][0]}/{s['week'][1]}" if s["week"][1] else "")
+                           + (" days" if s["per_week"] == 7 and s["week"][1] else "") for s in items)
+        lines.append(f"🎯 {goal}: {counts}" if goal else f"❔ No goal: {counts}. Keep them, or drop them?")
     return lines
 
 
@@ -382,10 +528,13 @@ if __name__ == "__main__":
         rep = report(json.loads(Path(args.file).read_text(encoding="utf-8")), today)
         rep["fetched"], rep["error"] = None, None
         write_note(rep)
+        write_log(rep)
     else:
         rep, error = refresh(today)
         if rep is None:
             raise SystemExit(f"No habit data: {error}")
     print(week_text(rep))
     print("\n" + "\n".join(brief_lines(rep)))
-    print(f"\nWrote {REPORT.relative_to(ROOT)}")
+    print("\n".join(review_lines(rep)))
+    print("\nOpen today: " + ", ".join(item_line(s) for s in open_today(rep)))
+    print(f"\nWrote {REPORT.relative_to(ROOT)} and {LOG.relative_to(ROOT)}")

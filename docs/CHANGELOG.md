@@ -4,6 +4,15 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 
 ## 2026-10-05
 
+### Habit coach: the bot pushes, logs and asks why
+- App: `POST`/`DELETE /api/integration/entries` (same token) so the bot can log and undo entries.
+- `scripts/habits.py` also writes `Habit Log` (every day's values and entry notes), and reads two new columns of *Habits in the app* in `Discipline`: **Goal** (the review groups habits by goal and questions habits without one) and **Also called** (words that log the habit from a message).
+- New `scripts/coach.py`: after each app reminder (plus `NAG_GRACE`, 30 min) the bot nags every `NAG_EVERY` (60) minutes about habits still open until `NAG_UNTIL` (23:00), with ✅ / ⏭ Skip / 😴 Snooze buttons; an evening check-in at `CHECKIN_TIME` (21:00); a last call before the day ends. Weekly habits are only pushed when the week needs it (at risk, or 2+ days since the last session).
+- Plain messages like "water 500" or "did mobility" log the habit (with Undo / "It was a note"); a "Workout…" note ticks strength and an English voice note ticks English.
+- Skipping asks "what got in the way?"; replies (voice too) go to `Habit Reasons`. The morning brief asks the same for yesterday's misses.
+- Morning brief: one focus first, short, with buttons (training, habits, tasks, a question). Sunday review: counts by goal, your reasons, and one proposed change to approve, which is written to Discipline's review log.
+- Command menu cut to /brief, /standup, /review, /help; the other commands still work when typed.
+
 ### Habit consistency from the habit tracker app
 - New `scripts/habits.py` (standard library, zero tokens). It reads the habit tracker's read-only endpoint (`GET /api/integration/habits`, bearer token in `HABITS_API_TOKEN`, URL in `HABITS_API_URL`), scores each habit against its target, and writes `02 - Areas/Discipline/Habit Consistency.md`. That note shows this week, the last 7 and 28 days, streaks, a weekly history, and the habits that need attention, each with its fix. Targets and fixes come from a new *Habits in the app* table in `Discipline`: "every day", "workdays" or "N× a week", with an optional start date, so weekly habits such as Strength aren't counted as missed on rest days. 🔴 means under 60%, or missed twice in a row. The last good response is cached in `scripts/habits.cache.json` (git-ignored), which is used when the app can't be reached.
 - Bot: the morning brief adds yesterday's habits and up to two slipping habits with their fix; the Sunday review adds this week's counts per habit and the one most worth fixing; new `/habits` command. Without the two env vars, all of this stays off.
