@@ -179,3 +179,7 @@ To keep it running, use a systemd service with `ExecStart=/home/<you>/Vault/scri
 - **Docker Desktop won't start ("An unexpected error occurred … listening on unix://… The file cannot be accessed by the system")**: a crash or unclean shutdown left stale socket files (`AppData\Local\Docker\run\…`, `AppData\Local\docker-secrets-engine\engine.sock`) that Windows can't remove. Quit the error dialog, then run `powershell -ExecutionPolicy Bypass -File scripts\windows\start-docker.ps1`. It moves those folders aside (renamed `*.stale-<date>`, nothing deleted) and starts Docker. For automatic recovery at sign-in, put a shortcut to that command in `shell:startup` (the current Windows setup uses `Start Docker for Vault.lnk`).
 - **Docker didn't start at sign-in although "Start Docker Desktop when you sign in" is on**: check Task Manager → Startup apps → Docker Desktop is *Enabled*. Turning the Docker setting off, applying, then on again rewrites the entry.
 - **`unhealthy` bot**: `docker compose logs --tail 50 bot` to see where it stopped, then `docker compose restart bot`.
+
+## Habit tracker connection (optional)
+
+Set `HABITS_API_URL` and `HABITS_API_TOKEN` in `scripts/.env` to connect the bot to the Everyday habit tracker app (see the app's README, *Integration endpoints*). Then the bot writes `Habit Consistency` and `Habit Log` in the Discipline area and nags about open habits. Tune it with `CHECKIN_TIME`, `NAG_EVERY`, `NAG_GRACE` and `NAG_UNTIL` (`scripts/.env.example`), then `docker compose restart bot`.
