@@ -16,10 +16,10 @@ MEMBERS = {
     "Coach": ("TRAINER_BOT_USERNAME", "your personal trainer: plans the training week, asks the time, pushes until you train, logs every set"),
     "Teacher": ("TEACHER_BOT_USERNAME", "your English teacher: drills on past mistakes, grammar sets, speaking sessions, corrections"),
 }
-OWNED_ALIASES = {"Coach": {"workout", "mobility"}, "Teacher": {"#english-practice"}}  # habits a companion bot pushes itself
+OWNED_ALIASES = {"Coach": {"workout", "mobility", "protein"}, "Teacher": {"#english-practice"}}  # habits a companion bot pushes itself
 # Pending tasks belong to the bot whose notes they link to; the Assistant keeps the rest.
 TASK_LINKS = {"Coach": ("[[Coach", "[[Full-Body", "[[Training", "[[Daily Mobility", "[[Home Training", "[[Técnica de dominadas",
-                        "[[Animal Flow", "[[Push-up Rotation"),
+                        "[[Animal Flow", "[[Push-up Rotation", "[[Protein Target"),
               "Teacher": ("[[English", "[[Daily Speaking", "[[Grammar")}
 
 

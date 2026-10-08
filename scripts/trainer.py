@@ -38,7 +38,7 @@ COACH_NOTE = ROOT / "02 - Areas" / "Training" / "Coach.md"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAY_NAMES = companion.DAY_NAMES
 
-BOT = Bot("Coach", "TRAINER_BOT_TOKEN", COACH_NOTE, "trainer")
+BOT = Bot("Coach", "TRAINER_BOT_TOKEN", COACH_NOTE, "trainer", agent="coach", writes=("02 - Areas/Training", "00 - Inbox"))
 S = BOT.S
 PLAN_TIME = env("TRAINER_PLAN_TIME", "Sun 20:00")
 ASK_TIME = env("TRAINER_ASK_TIME", "21:30")
@@ -50,7 +50,8 @@ NAG_GRACE = 15
 MOBILITY_TIME = env("TRAINER_MOBILITY_TIME", "09:00")   # the daily mobility nag starts here (or at the app's reminder, if earlier)
 MOBILITY_EVERY = int(env("TRAINER_MOBILITY_EVERY", "30"))
 MOBILITY_MAX = int(env("TRAINER_MOBILITY_MAX", "6"))
-TASK_TIMES = ("10:00", "19:30")                          # related Pending Tasks, twice a day
+TASK_TIMES = ("10:00", "19:30")
+PROTEIN_TIME = env("TRAINER_PROTEIN_TIME", "20:00")    # evening protein check (Protein Target note: 160 g a day)                          # related Pending Tasks, twice a day
 MOBILITY_NOTE = ROOT / "02 - Areas" / "Training" / "mobility" / "Daily Mobility Routine (5 Minutes).md"
 TIME_CHOICES = ["07:00", "08:00", "13:00", "18:00", "18:30", "19:00", "20:00"]
 
@@ -478,6 +479,12 @@ def tick():
                                                           "🚶 Missing twice is how habits die. 5 minutes.",
                                                           "🚶 Mobility.", "🚨 Last call: 5 minutes of mobility, now."][min(n - 1, 5)]),
                   [[("📄 The routine", "mob:")]])
+    BOT.nag_habit("protein", "protein", at(today, PROTEIN_TIME), t, 60, 3,
+                  lambda s, n: say("evening protein check: how far from today's protein target; suggest one easy food to close it",
+                                   f"{habits.fmt(s['today_value'])} of {habits.fmt(s['target'])} g today",
+                                   f"🥩 Protein: {habits.fmt(s['today_value'])}/{habits.fmt(s['target'])} g today. "
+                                   "Close the gap: Greek yogurt, a can of tuna, 3 eggs or a shake."),
+                  [[("+20 g", "hq:protein:20"), ("+30 g", "hq:protein:30"), ("+40 g", "hq:protein:40")]])
     BOT.remind_tasks("Coach", t, TASK_TIMES)
     # rest days: one note on the routine (Sunday: tonight's planning)
     if not days().get(today.isoformat()) and t >= at(today, MORNING) and once(f"rest:{today}"):
@@ -851,8 +858,9 @@ def text_message(text):
         command(t)
     else:
         answer = claude(f"The athlete writes: {t}\nAnswer as their coach in under 120 words, plain text. Use the vault when "
-                        "useful: index.md, Coach.md, the Training notes, Full-Body Strength Log, About Me.", tools=True, model="sonnet",
-                        timeout=180)
+                        "useful: index.md, Coach.md, the Training notes, Full-Body Strength Log, About Me. If they ask you to record "
+                        "or change something in your Training notes, do it (your agent definition's writing rules) and say what "
+                        "you changed.", tools=True, model="sonnet", timeout=240)
         send(answer or "I answer questions once Claude Code is connected (see Coach.md). Commands: /today /plan /train /time /skip /week")
 
 

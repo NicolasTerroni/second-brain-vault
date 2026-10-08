@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "03 - Resources" / "Sources"
-SKIP = {".obsidian", "scripts", ".git", "docs", ".trash", "node_modules"}
+SKIP = {".obsidian", ".claude", "scripts", ".git", "docs", ".trash", "node_modules"}
 # [[target]], [[target#heading]], [[target|alias]], [[target\|alias]] (escaped alias inside a table)
 LINK = re.compile(r"\[\[([^\]|#\\]+)(?:#[^\]|]*)?(?:\\?\|[^\]]*)?\]\]")
 NAV = {"index", "log"}                   # navigation files at the vault root

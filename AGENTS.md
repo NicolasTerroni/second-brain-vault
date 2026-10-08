@@ -46,6 +46,20 @@ source:        # URL, book, person, or "own idea"
 - Prefer atomic notes (one idea each). Use MOCs (Maps of Content, `type: moc`) as index notes for a topic, placed in the relevant folder.
 - Attachments: store in `Attachments/` inside the folder of the owning note only when needed; do not leave loose files in the vault root.
 
+## The agent team
+
+The vault is run by three agents, each defined in `.claude/agents/` (who it is, what it owns, its writing rules) and each also running a Telegram bot from the same definition:
+
+| Agent | Owns (may write) | Bot |
+|---|---|---|
+| **assistant** | everything else: the Inbox and its processing, Projects, Areas and Resources outside Training and English, `index.md`, `log.md`, Pending Tasks, About Me, Discipline | `scripts/telegram_bot.py` |
+| **coach** | `02 - Areas/Training/` (routine, strength log, exercises, mobility, nutrition such as [[Protein Target]]) | `scripts/trainer.py` |
+| **english-teacher** | `02 - Areas/English/` and `01 - Projects/English to C1/` | `scripts/teacher.py` |
+
+All three read the whole vault. The coach and the english-teacher write only inside their own folders (plus new captures in `00 - Inbox`); their bots enforce it with Claude Code permission rules. They report what should change elsewhere, and the assistant applies it.
+
+**When organizing** (the Inbox workflow below): the assistant classifies every capture. Training items (workouts, exercise and mobility videos, Workout notes, coach-logged sessions to finish) go to the **coach** agent; English items (standups, English voice notes, `teacher` captures, grammar or learning material) go to the **english-teacher** agent. Give each its items, the raw-source paths after they're moved to `03 - Resources/Sources/`, and the user's context. The assistant then applies their reports (index lines, log entries, Pending Tasks, work facts for Career or About Me) and finishes the operation as usual. In a Claude Code session the agents are subagents (`coach`, `english-teacher`); when they aren't registered in the session, run a general-purpose subagent told to follow `.claude/agents/<name>.md` exactly.
+
 ## Inbox processing workflow
 
 When the user asks to process the Inbox:
@@ -152,7 +166,7 @@ The vault should know the user well enough to connect their goals, notes and hab
   - A capture starting with **"Workout"**: a training session. Add a row to `Full-Body Strength Log` (session log, plus benchmarks if it was a test), update its *Current level and next target* with the log's progression rules, and change the variation in the routine when a step up is due. It also counts as a Strength check-in for the weekly review.
   - **Sessions logged by the personal trainer** (`scripts/trainer.py`, [[Coach]]) are already in the session log, marked "Logged by the coach", with *Last session* updated. At organize, finish them: update *Next target* with the progression rules and step up the variation in the routine for every exercise listed under "Top of range". Don't add a second row if a "Workout" capture covers the same date; merge it into the coach's row.
   - `#weekly-review`: add a 3-line entry to the *Review log* in `Discipline`, and apply the one change it names to the habit table.
-- **The bot team** ([[Assistant]]): three Telegram bots in one container. The **Assistant** (`telegram_bot.py`) owns captures, goals, projects, Pending Tasks, the daily habits, the weekly review and `/ask`; the **Coach** (`trainer.py`, [[Coach]]) owns training; the **English Teacher** (`teacher.py`, [[English Teacher]]) owns English. `scripts/team.py` lets each read the others' state and gives their Claude prompts the team context. When you change one bot's job, update its brief note, the *Your team* table in [[Assistant]] and `team.MEMBERS`.
+- **The bot team** ([[Assistant]]): three Telegram bots in one container. The **Assistant** (`telegram_bot.py`) owns captures, goals, projects, Pending Tasks, the daily habits, the weekly review and `/ask`; the **Coach** (`trainer.py`, [[Coach]]) owns training; the **English Teacher** (`teacher.py`, [[English Teacher]]) owns English. `scripts/team.py` lets each read the others' state and gives their Claude prompts the team context. When you change one bot's job, update its agent definition (`.claude/agents/`), its brief note, the *Your team* table in [[Assistant]], `team.MEMBERS`/`OWNED_ALIASES`, and *The agent team* above.
 - **Habit consistency** comes from the user's habit tracker app. `scripts/habits.py` rewrites `02 - Areas/Discipline/Habit Consistency.md` (scores) and `Habit Log.md` (every day's values and entry notes) whenever the bot reads the app, so never edit those two by hand. `Habit Reasons.md` holds the user's own words on why a habit was skipped or missed (the bot appends them); read it with the scores, and never rewrite past lines. It scores each habit against its row in *Habits in the app* in `Discipline` (the name as in the app, the target, and "When it slips, try"). At each organize and weekly review, read its *Needs attention* section. For a 🔴 habit whose fix isn't working (still 🔴 a week later), rewrite its fix with the user's own reasons and the [[Discipline]] obstacles: a smaller minimum, a better time, or a different reminder. Change one fix at a time, and log it. When the user adds, renames or drops a habit in the app, update that table too, including its **Goal** (a habit with no goal gets questioned at the review) and **Also called** (the words that log it from Telegram).
   - `area/<slug>` tags chosen with the bot's area buttons are the user's own hint for classification. Follow them unless the content clearly says otherwise.
   - A `## Added <time>` section in a capture is a later reply from the user. It belongs to the capture.

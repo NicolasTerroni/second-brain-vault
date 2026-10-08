@@ -41,8 +41,10 @@ def in_range(t, span):
 
 
 class Bot:
-    def __init__(self, name, token_key, note, prefix):
+    def __init__(self, name, token_key, note, prefix, agent=None, writes=()):
         self.name = name
+        self.agent = agent       # its definition in .claude/agents/<agent>.md: who it is, what it owns, the vault rules
+        self.writes = writes     # the only vault folders it may edit (Claude Code permission rules enforce it)
         self.token = env(token_key)
         self.allowed, self.owner = owner()
         self.note = note                                    # the vault note with ## Persona and the profile section
@@ -154,10 +156,16 @@ class Bot:
         if not self.ai_on():
             return None
         cmd = [shutil.which("claude"), "-p", prompt, "--model", model, "--output-format", "text", "--append-system-prompt", self.brief()]
-        cmd += (["--allowedTools", "Read,Grep,Glob", "--max-turns", "12"] if tools else ["--max-turns", "1"])
-        cmd += ["--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"]
+        if self.agent and (ROOT / ".claude" / "agents" / f"{self.agent}.md").exists():
+            cmd += ["--agent", self.agent]
+        if tools:  # read the whole vault; write only in its own folders (when it has any)
+            allowed = ["Read", "Grep", "Glob"] + [f"Edit({path}/**)" for path in self.writes]  # Edit(path) covers every file write
+            cmd += ["--allowedTools", ",".join(allowed), "--max-turns", "20"]
+            cmd += ["--disallowedTools", "Bash,NotebookEdit,WebFetch,WebSearch,Task"]
+        else:
+            cmd += ["--max-turns", "1", "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task"]
         try:
-            out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout,
+            out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
                                  env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": env("CLAUDE_CODE_OAUTH_TOKEN")})
             text = out.stdout.strip()
             return text if out.returncode == 0 and text else None
@@ -209,11 +217,25 @@ class Bot:
 
     def common_button(self, data, now):
         """✅ habit, ⏰ snooze, ✅ task. True when handled."""
+        if data.startswith("hq:"):  # a quick amount for a quantity habit, e.g. +30 g of protein
+            alias, _, value = data[3:].rpartition(":")
+            s = self.app_habit(alias)
+            if s:
+                try:
+                    coach.log(s, float(value), f"logged from the {self.name}")
+                    unit = s.get("unit") or ""
+                    self.send(f"✅ +{value} {unit}: {habits.fmt(s['today_value'])}/{habits.fmt(s['target'])} {unit} today."
+                              + (" Target reached. 💪" if s["done_today"] else ""))
+                except Exception as e:
+                    self.send(f"⚠️ Couldn't log it in the app ({e}).")
+            return True
         if data.startswith("hd:"):
             s = self.app_habit(data[3:])
             if s and not s["done_today"]:
                 try:
-                    coach.log(s, 1, f"ticked from the {self.name}")
+                    # yes/no habits: 1; amounts ("✅ I reached it"): exactly what's left today
+                    value = 1 if s["type"] == "boolean" or not s.get("target") else max(s["target"] - s["today_value"], 0) or 1
+                    coach.log(s, value, f"ticked from the {self.name}")
                     self.send(f"✅ {s['name']} ticked. Good.")
                 except Exception as e:
                     self.send(f"⚠️ Couldn't tick it in the app ({e}).")

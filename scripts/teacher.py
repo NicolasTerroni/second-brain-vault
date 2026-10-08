@@ -36,7 +36,8 @@ INBOX = ROOT / "00 - Inbox"
 ATTACH = INBOX / "attachments"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-BOT = Bot("Teacher", "TEACHER_BOT_TOKEN", NOTE, "teacher")
+BOT = Bot("Teacher", "TEACHER_BOT_TOKEN", NOTE, "teacher", agent="english-teacher",
+          writes=("02 - Areas/English", "01 - Projects/English to C1", "00 - Inbox"))
 S = BOT.S
 DRILL_TIME = env("TEACHER_DRILL_TIME", "08:30")
 GRAMMAR_TIME = env("TEACHER_GRAMMAR_TIME", "13:00")
@@ -648,8 +649,9 @@ def text_message(t, msg=None):
         skip_today(t)
     else:
         answer = BOT.claude(f"I write: {t}\nAnswer as my English teacher in under 120 words, plain text. Use my notes when useful: "
-                            "02 - Areas/English/Daily Speaking Practice.md, English Teacher.md, 01 - Projects/English to C1.",
-                            tools=True, model="sonnet", timeout=180)
+                            "02 - Areas/English/Daily Speaking Practice.md, English Teacher.md, 01 - Projects/English to C1. If I ask "
+                            "you to record or change something in your English notes, do it (your agent definition's writing rules) "
+                            "and say what you changed.", tools=True, model="sonnet", timeout=240)
         send(answer or "I answer questions once Claude Code is connected. Meanwhile: /speak, /drill, /today")
 
 

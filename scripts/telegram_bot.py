@@ -978,7 +978,7 @@ COMMANDS = [("brief", "Today: focus, goals, team"), ("todo", "This week's tasks"
             ("team", "What your Coach and Teacher have today"), ("ask", "Ask anything about your vault"),
             ("habits", "This week's habits"), ("review", "Weekly review now"), ("help", "How I work")]
 ASSISTANT_NOTE = ROOT / "02 - Areas" / "About Me" / "Assistant.md"
-ASSIST = botkit.Bot("Assistant", "TELEGRAM_BOT_TOKEN", ASSISTANT_NOTE, "assistant")  # only its Claude Code voice is used
+ASSIST = botkit.Bot("Assistant", "TELEGRAM_BOT_TOKEN", ASSISTANT_NOTE, "assistant", agent="assistant")  # /ask: read-only
 
 
 def answer_question(chat, question, status):

@@ -4,6 +4,12 @@ Changes to the vault **system**: scripts, Docker, agent rules. Note-level operat
 
 ## 2026-10-08
 
+### The Coach and the English Teacher become agents
+- `.claude/agents/assistant.md`, `coach.md`, `english-teacher.md`: agent definitions (who each is, what it owns, its writing rules). `botkit.Bot(agent=..., writes=...)` runs Claude Code with `--agent` and, for questions, read access to the whole vault plus `Edit(<folder>/**)` permission rules limited to the bot's own folders (Coach: Training; Teacher: English and the C1 project; Assistant: read-only `/ask`). Questions can now ask the Coach or the Teacher to record something in their notes. `stdin` is closed so Claude Code doesn't wait 3 s.
+- `AGENTS.md` *The agent team*: ownership table and how organize hands Training and English captures to the coach and english-teacher agents.
+- Coach: evening protein check (`TRAINER_PROTEIN_TIME`, 20:00) with +20/+30/+40 g buttons; `team.OWNED_ALIASES` gives it `protein`. ✅ on a quantity habit logs exactly what's left today (`hq:` quick amounts in `common_button`).
+- `vault.SKIP` ignores `.claude/` (the agent files share names with the Coach and Assistant notes).
+
 ### /todo shows titles only
 - `/todo` lists every open task as a one-line title (`companion.task_title`), grouped by section, instead of this week's full descriptions; "Done" replies and the /done choices use titles too.
 
