@@ -4,6 +4,7 @@ and can be tested on any host. Used by telegram_bot.py."""
 import json, re
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 from vault import ROOT, frontmatter, read, vault_files
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -278,12 +279,68 @@ def session_plan(day):
     return "\n\n".join(parts)
 
 
-def brief_text(today=None, habit_lines=None):
+def training_caption(day=None, today=None):
+    """Short Telegram caption for the actual Obsidian routine note attachment."""
+    status = training_status(today)
+    day = day or status["next"]
+    if not session_plan(day):
+        return None
+    note_path = quote(ROUTINE.relative_to(ROOT).with_suffix("").as_posix(), safe="/")
+    obsidian_uri = f"obsidian://open?vault=Vault&file={note_path}"
+    return (f"🏋️ {DAY_NAMES[day]} (~40 min) · {status['this_week']}/{status['target']} this week.\n"
+            f"Full Obsidian routine note attached, with both days and exercise links.\n{obsidian_uri}")
+
+
+ABOUT_ME = ABOUT / "About Me.md"
+
+
+def task_title(text):
+    """A task's bold title ("**Do X**: details" -> "Do X"), or its first 90 characters."""
+    m = re.search(r"\*\*(.+?)\*\*", text)
+    return plain(m.group(1)) if m else plain(text)[:90]
+
+
+def goals():
+    """[(goal, where)] from the "What you're working on" table in About Me."""
+    out, inside = [], False
+    for line in _lines(ABOUT_ME):
+        if line.startswith("## "):
+            inside = line.startswith("## What you're working on")
+        elif inside and line.startswith("| ") and not line.startswith(("| Goal", "|---")):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 2:
+                out.append((plain(cells[0]), plain(cells[1])))
+    return out
+
+
+def goals_text():
+    rows = goals()
+    if not rows:
+        return "🎯 No goals table in About Me yet."
+    return "🎯 Your goals\n" + "\n".join(f"{i}. {g}\n   ↳ {w}" for i, (g, w) in enumerate(rows, 1))
+
+
+def brief_text(today=None, habit_lines=None, team_lines=None):
     """habit_lines: from habits.brief_lines (the habit tracker app). With them the brief is short: the day's focus
-    first, then training, English and one correction; tasks and the rest are behind the brief's buttons."""
+    first, then training, English and one correction; tasks and the rest are behind the brief's buttons.
+    team_lines: the Coach's and the Teacher's status (team.py); they replace the training and English lines."""
     today = today or date.today()
     weekday = today.weekday() < 5
     lines = [f"☀️ Good morning! {today:%A %d %B}"]
+    if habit_lines and team_lines:
+        lines += ["", *habit_lines]
+        rows = goals()
+        if rows:
+            goal, where = rows[today.toordinal() % len(rows)]
+            lines.append(f"\n🎯 Goal in focus: {goal}\n   ↳ {where}")
+        week = this_week()
+        if week:
+            lines.append(f"📌 This week: {task_title(week[0][2])}" + (f"  (+{len(week) - 1} more: /todo)" if len(week) > 1 else ""))
+        for name, days in deadlines(today):
+            if days >= 0:
+                lines.append(f"⏳ {name}: {days} days left")
+        lines += ["\n👥 Your team today", *team_lines]
+        return "\n".join(lines)
     if habit_lines:
         lines += ["", *habit_lines]
         if ROUTINE.exists():

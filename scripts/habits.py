@@ -451,6 +451,26 @@ def undo_entry(entry_id):
     _call("DELETE", f"/api/integration/entries?id={entry_id}")
 
 
+# ---------- focus lock (the app decides; an iPhone Shortcut enforces it) ----------
+def lock_status():
+    """The app's focus lock right now (GET /api/integration/lock), or None when it's off or the app can't be reached."""
+    try:
+        status = _call("GET", "/api/integration/lock")
+    except Exception as e:
+        print("lock status failed:", e)
+        return None
+    return status if status and status.get("rule") != "off" else None
+
+
+def lock_line(status):
+    if status["locked"]:
+        until = f" until {status['focusHours']['end']}" if status.get("focusHours") else ""
+        return f"🔒 Apps locked{until}: {status['message'].removeprefix('Locked: ')}."
+    if status.get("goalMet"):
+        return "🔓 Apps unlocked: you've earned your free time today."
+    return "🔓 Apps open now (outside your focus hours)."
+
+
 # ---------- chat text (telegram_bot.py) ----------
 def refresh(today=None):
     """Fetch, score and write the notes. (report, error) with report None when there is no data at all."""

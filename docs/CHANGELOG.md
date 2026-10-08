@@ -2,6 +2,52 @@
 
 Changes to the vault **system**: scripts, Docker, agent rules. Note-level operations are in `log.md`, which is personal and not committed. Pending ideas are in [BACKLOG.md](BACKLOG.md).
 
+## 2026-10-08
+
+### /todo shows titles only
+- `/todo` lists every open task as a one-line title (`companion.task_title`), grouped by section, instead of this week's full descriptions; "Done" replies and the /done choices use titles too.
+
+### Each bot nags about what it owns
+- `botkit.py`: `nag_habit` (an app habit, every N min from a start time until ticked, with ✅ Done / ⏰ 1 h), `remind_tasks` (open Pending Tasks that link to the bot's notes, twice a day, ✅ per task) and `common_button`. `team.py`: `OWNED_ALIASES` (Coach: workout + mobility; Teacher: English), `related_tasks` (by wikilinks; dated tasks wait until 2 days before; the Assistant keeps this week's unowned tasks).
+- Coach: daily mobility nags (09:00 or the app reminder, every 30 min, 6 max, 📄 sends the routine), training tasks at 10:00 and 19:30, a rest-day note on the routine (Sunday: tonight's planning).
+- Teacher: English every day (`TEACHER_SPEAK_DAYS` default Mon-Sun), English tasks at 09:00 and 20:00, reminders for an unanswered drill, rewrite or quizzes every 2 h (3 a day), replacing the single grammar nudge.
+- Assistant: its nags skip every habit a teammate owns (`coach.open_today` uses `team.owned_aliases`); this week's other tasks at 13:00 and 19:00.
+
+### The capture bot becomes the Assistant; the three bots work as a team
+- `scripts/team.py`: each bot reads the others' state (training today and this week, English spoken vs target, grammar left, a session running). `botkit.brief()` adds the team (members, roles, today's reports, "stay in your lane") to every Claude prompt.
+- Handoffs: the Teacher doesn't nag during a Coach session; after a session the Coach adds what English is still open; after the speaking target the Teacher adds training still waiting.
+- `telegram_bot.py` (Assistant, persona in `02 - Areas/About Me/Assistant.md`): the brief shows the daily habits it owns (Strength and English filtered out when their bots are on), a goal in focus (About Me table), this week's top task (bold title), deadlines and a "Your team today" block; no routine attachment when the Coach is on. New `/goals`, `/team`, and a working `/ask` (Claude Code reads the vault read-only, in a thread). `/train` and `/standup` point to the Coach and the Teacher. The trainer's bot name is now "Coach".
+
+### English teacher: grammar sets
+- `scripts/grammar.py` + `teacher.py`: every day at `TEACHER_GRAMMAR_TIME` (13:00) a set of 4 Telegram quiz polls and 1 rewrite exercise built on the mistakes in Daily Speaking Practice (topics weighted by how often they appear there and by your error rate). Levels 1-3 by accuracy over the last 10 answers. Claude Code writes fresh sets from your corrections when connected (JSON, validated; falls back to the bank). One nudge 4 h later if unanswered; score per set, per topic and in the Sunday report; `/grammar` on demand.
+- `botkit.py`: `send_poll` (quiz polls) and `poll_answer` updates.
+- Rewrites explain their grammar term in plain words and show a worked example on a different topic; Claude-written sets without both are rejected, and the teacher's persona never uses a grammar term unexplained (your feedback).
+
+### English teacher (third Telegram bot, same container) and a shared base
+- `scripts/botkit.py`: Telegram, state, send-once keys, quiet hours, poll loop and the Claude Code voice, shared by the companion bots. `trainer.py` now runs on it (behaviour unchanged, same tests).
+- `scripts/teacher.py`: every morning a drill on one past correction from Daily Speaking Practice (spaced repetition: 1, 3, 7, 14, 30 days; missed ones come back tomorrow). Speaking days (Mon-Fri): a voice-note session at 18:00 with a topic (standup, then harder exercises by level), nags every 30 min until the day's target, never during quiet hours. Voice notes are transcribed with the capture bot's Whisper, saved as raw captures (`teacher`, `english-practice`, `corrected` when Claude Code corrected them) and corrected into Daily Speaking Practice; reaching the target ticks English in the habit tracker. Every 3 days in a row on target: +15 s (2:00 → 6:00) and harder exercises. Tired = 1 minute today; skip reasons go to Habit Reasons; Sunday report; questions answered from the notes. A message counts as a drill answer only as a reply to the drill, or when short and soon after it.
+- Both bots ask about the session when the habit is ticked in the app without them (the coach stops nagging and can log the sets afterwards); the capture bot no longer nags about English while the teacher is on.
+- `AGENTS.md`: teacher captures tagged `corrected` aren't corrected again at organize.
+
+## 2026-10-07
+
+### Personal trainer (second Telegram bot, same container)
+- `scripts/trainer.py`: plans the week (Sunday, 3 days, never back to back, auto-confirmed Monday morning; fewer than the target asks for a reason), asks the training time the evening before and in the morning, sends a heads-up with the routine note, "Go", then nags every 20 min (6 max, quiet 22:30-07:00, 15-minute version from the 2nd nag). Guided session: each exercise of the day in canvas order with its target and last result, one tap per set; on finish it adds the session row, updates *Last session*, flags records and top-of-range exercises, ticks Strength in the app. Missed days are followed up the next morning and today becomes a training day; "can't today" moves the session (tired: 15-minute version first; sick or pain: rest plus a morning check-in). Reasons go to Habit Reasons. Toggles Strength's non-negotiable flag per day in the app.
+- Runs as a thread of `telegram_bot.py` when `TRAINER_BOT_TOKEN` is set; state in `scripts/trainer.state.json` (git-ignored). The capture bot's coach stops nagging about Strength while it's on (`coach.open_today`).
+- Optional voice: Claude Code (pinned 2.1.293, now in the image with Node.js) in print mode with the persona from `02 - Areas/Training/Coach.md`; read-only tools for free questions. Falls back to templates without `CLAUDE_CODE_OAUTH_TOKEN`.
+- Rule in `AGENTS.md`: coach-logged sessions are finished at organize (next targets, variation step-ups), never duplicated by a Workout capture.
+
+### Bot: focus lock from the habit tracker
+- `habits.lock_status()` reads the app's new `GET /api/integration/lock` (same token as the other integration routes); `habits.lock_line()` turns it into one line.
+- `/lock` shows whether distracting apps are locked right now and what unlocks them. The morning brief adds that line when the lock is on.
+- After a habit is logged from Telegram (a plain message, or a Workout/English note), the bot says "apps unlocked" once a day when that log met the unlock rule.
+
+## 2026-10-06
+
+### Send the Obsidian routine note in training reminders
+- The morning brief, Strength coach reminders and `/train` now send the original routine `.md` as a Telegram document, with a caption naming the upcoming day and an Obsidian URI for the synced note.
+- The routine canvas continues to choose Day 1 or Day 2 from the training log; the Markdown attachment preserves its wikilinks and exercise references.
+
 ## 2026-10-05
 
 ### Habit coach: the bot pushes, logs and asks why

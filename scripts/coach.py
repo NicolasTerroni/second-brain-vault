@@ -7,7 +7,7 @@ reminder before the bot starts (30), NAG_UNTIL (23:00)."""
 import re, time
 from datetime import date, datetime, timedelta
 import habits
-from companion import plain
+from companion import plain, training_caption
 from vault import ROOT, read
 
 REASONS = ROOT / "02 - Areas" / "Discipline" / "Habit Reasons.md"
@@ -119,10 +119,25 @@ def day_state(state, today):
 
 
 def message(items, header):
-    lines = [header, *(habits.item_line(s) for s in items), "", "Tap ✅ when it's done, or ⏭ to skip it with a reason."]
+    lines = [header, *(habits.item_line(s) for s in items)]
+    is_training = any({"strength", "workout", "training"} &
+                      {str(alias).casefold() for alias in s.get("aliases", [])} for s in items)
+    if is_training:
+        caption = training_caption()
+        if caption:
+            lines.extend(["", caption])
+    lines.extend(["", "Tap ✅ when it's done, or ⏭ to skip it with a reason."])
     rows = [[(habits.done_button(s)[0], f"hd:{s['id']}"), ("⏭ Skip", f"hs:{s['id']}")] for s in items[:8]]
     rows.append([("😴 Snooze 2 h", "hz:")])
-    return "\n".join(lines), rows
+    return "\n".join(lines), rows, is_training
+
+
+def open_today(rep):
+    """Habits still open today, minus the ones a companion bot nags about itself (team.py: Strength and mobility belong to
+    the Coach, English to the Teacher)."""
+    import team
+    own = team.owned_aliases()
+    return [s for s in habits.open_today(rep) if not own & set(s["aliases"])]
 
 
 def tick(state, now=None):
@@ -141,7 +156,7 @@ def tick(state, now=None):
         return []
 
     def candidates(r):
-        return [s for s in habits.open_today(r) if s["id"] not in st["skipped"] and now >= due_at(s, today)]
+        return [s for s in open_today(r) if s["id"] not in st["skipped"] and now >= due_at(s, today)]
 
     expired = [s for s in candidates(rep) if now.timestamp() - st["nagged"].get(s["id"], 0) >= NAG_EVERY * 60]
     if not expired and not checkin:
@@ -151,10 +166,10 @@ def tick(state, now=None):
         return []
     if checkin:
         st["checkin"] = True
-        items = [s for s in habits.open_today(rep) if s["id"] not in st["skipped"]]
+        items = [s for s in open_today(rep) if s["id"] not in st["skipped"]]
         header = "🌙 Evening check-in. Still open today:" if items else None
         if not items:
-            return [("🌙 Evening check-in: everything's done today. 🎉", None)]
+            return [("🌙 Evening check-in: everything's done today. 🎉", None, False)]
     else:
         items = candidates(rep)
         if not items:

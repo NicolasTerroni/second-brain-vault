@@ -21,9 +21,11 @@ Run: python scripts/telegram_bot.py
 import json, os, re, sys, time, html, secrets, shutil, tempfile, threading, urllib.request, urllib.parse
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import botkit
 import coach
 import companion
 import habits
+import team
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = Path(__file__).with_name("vendor")
@@ -86,6 +88,36 @@ def reply(chat, text, message_id=None, buttons=None):
         return api("sendMessage", **params)["message_id"]
     except Exception as e:
         print("reply failed:", e)
+        return None
+
+
+def send_document(chat, path, caption=None, buttons=None):
+    """Send a vault file as a Telegram document, preserving the original Markdown and wikilinks."""
+    boundary = "----VaultBot" + secrets.token_hex(16)
+    fields = [("chat_id", str(chat))]
+    if caption:
+        fields.append(("caption", caption))
+    if buttons:
+        rows = buttons if isinstance(buttons[0], list) else [buttons]
+        markup = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in rows]}
+        fields.append(("reply_markup", json.dumps(markup, ensure_ascii=False)))
+    body = bytearray()
+    for name, value in fields:
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode("utf-8"))
+    path = Path(path)
+    content_type = "text/markdown"
+    body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{path.name}\"\r\n"
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+    body.extend(path.read_bytes())
+    body.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+    request = urllib.request.Request(f"{API}/sendDocument", data=bytes(body), method="POST",
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(request, timeout=70) as response:
+            result = json.load(response)
+        return result["result"]["message_id"] if result.get("ok") else None
+    except Exception:
+        print("document send failed")
         return None
 
 
@@ -700,7 +732,18 @@ def quick_log(chat, text):
         companion.save_state(STATE)
         buttons = [("↩️ Undo", f"hu:{entry['id']}"), ("📝 It was a note", f"hn:{entry['id']}")]
     reply(chat, coach.logged_text(s, value, created), buttons=buttons)
+    if created:
+        announce_unlock(chat)
     return True
+
+
+def announce_unlock(chat):
+    """After a habit is logged, say so once a day when it unlocked the apps (the app's focus lock)."""
+    status = habits.lock_status()
+    if status and not status["locked"] and status.get("goalMet") and STATE.get("unlocked_day") != status.get("date"):
+        STATE["unlocked_day"] = status.get("date")
+        companion.save_state(STATE)
+        reply(chat, habits.lock_line(status))
 
 
 def auto_tick(chat, item):
@@ -718,6 +761,7 @@ def auto_tick(chat, item):
             entry, created = coach.log(s, 1)
             if created:
                 reply(chat, coach.logged_text(s, 1, created) + " (from your note)")
+                announce_unlock(chat)
     except Exception as e:
         print("auto tick failed:", e)
 
@@ -862,10 +906,10 @@ def handle_button(query):
     elif action == "done":
         task = STATE.get("done_choices", {}).get(arg)
         if task and companion.tick_task(int(arg), task):
-            reply(chat, f"✅ Done: {companion.plain(task)}", message_id)
+            reply(chat, f"✅ Done: {companion.task_title(task)}", message_id)
         else:
             reply(chat, "That task changed or was already ticked. Try /done again.", message_id)
-    elif action == "cmd" and arg in ("train", "habits", "todo", "q"):
+    elif action == "cmd" and arg in ("train", "habits", "todo", "q", "goals", "team"):
         command(chat, f"/{arg}")
     elif action in ("hd", "hs"):
         coach.report()
@@ -913,27 +957,36 @@ def handle_button(query):
 
 
 # ---------- commands ----------
-HELP = """🤖 How I work
+HELP = """🤖 I'm your assistant: your vault, goals, tasks and daily habits. Training is your Coach's job ({coach}) and English your Teacher's ({teacher}); I keep the three of us in sync.
 
 📥 Send anything (text, link, voice, photo, file): it lands in your Inbox. Reply to a "Saved" message to add to it.
-✅ Log a habit by saying it: "water 500", "did mobility", "read 20 min". A "Workout…" note ticks strength; an English voice note ticks English.
-⏰ I push you: after your app's reminder, I nag about what's still open, then a check-in at night. ⏭ Skip asks what got in the way.
-☀️ Every morning: one focus, with buttons for training, habits, tasks and a question. Sunday: the review, with one change to approve.
+✅ Log a habit by saying it: "water 500", "did mobility", "read 20 min".
+⏰ I push the daily habits: after your app's reminder I nag about what's still open, then a check-in at night. ⏭ Skip asks what got in the way.
+☀️ Every morning: one habit focus, a goal, this week's top task, deadlines and what your Coach and Teacher have planned. Sunday: the review.
 
-Also: /add <task>, /done <task>, /standup, /review, /status, /backup.
+🎯 /goals · 📌 /todo, /add, /done · 👥 /team · ❓ /ask <question> (answers from your whole vault) · 🔒 /lock · /habits · /review · /status · /backup
 
 ⏰ {schedule}"""
 
 SOON = {
-    "/ask": "🔜 /ask is coming soon.\nIt will answer your question from the wiki: read index.md, open the notes that matter, and reply "
-            "with the answer and the notes it used. It runs Claude Code on your PC, so each question spends tokens.",
     "/organize": "🔜 /organize is coming soon.\nIt will process the Inbox the way you now ask for it in chat: file each raw capture, "
                  "write the distilled notes, add English corrections from standups, update the indexes and the log, and send you a "
                  "summary. It will ask for confirmation first, because it spends tokens.",
 }
 
-COMMANDS = [("brief", "Today: focus, training, habits"), ("standup", "Today's standup in English"),
-            ("review", "Weekly review now"), ("help", "How the bot works")]
+COMMANDS = [("brief", "Today: focus, goals, team"), ("todo", "This week's tasks"), ("goals", "Your goals"),
+            ("team", "What your Coach and Teacher have today"), ("ask", "Ask anything about your vault"),
+            ("habits", "This week's habits"), ("review", "Weekly review now"), ("help", "How I work")]
+ASSISTANT_NOTE = ROOT / "02 - Areas" / "About Me" / "Assistant.md"
+ASSIST = botkit.Bot("Assistant", "TELEGRAM_BOT_TOKEN", ASSISTANT_NOTE, "assistant")  # only its Claude Code voice is used
+
+
+def answer_question(chat, question, status):
+    """/ask: Claude Code reads the vault (read-only) and answers with the notes it used."""
+    text = ASSIST.claude(f"My question: {question}\nAnswer from my vault: read index.md first, then the notes that matter. "
+                         "Reply in under 150 words, plain text, and end with the note names you used. If the vault doesn't say, "
+                         "say so; don't invent.", tools=True, model="sonnet", timeout=300)
+    reply(chat, text or "I couldn't get an answer this time. Try again in a minute.", status)
 
 
 def schedule_text():
@@ -977,14 +1030,23 @@ def habit_report():
         return None
 
 
-BRIEF_BUTTONS = [[("🏋️ Training", "cmd:train"), ("📊 Habits", "cmd:habits")], [("📌 Tasks", "cmd:todo"), ("❓ A question", "cmd:q")]]
+BRIEF_BUTTONS = [[("📌 Tasks", "cmd:todo"), ("🎯 Goals", "cmd:goals")], [("📊 Habits", "cmd:habits"), ("👥 Team", "cmd:team")]]
 
 
 def send_brief(chat):
     """The morning brief. Replying to it answers "what got in the way?" for yesterday's misses."""
     rep = habit_report()
-    sent = reply(chat, companion.brief_text(habit_lines=habits.brief_lines(rep) if rep else None)
+    owned = team.owned_aliases()  # Strength and English belong to the Coach and the Teacher when they're on
+    view = dict(rep, habits=[s for s in rep["habits"] if not owned & set(s["aliases"])]) if rep else None
+    lines = habits.brief_lines(view) if view else None
+    lock = habits.lock_status() if rep else None
+    if lock:
+        lines.append(habits.lock_line(lock))
+    team_lines = team.lines()
+    sent = reply(chat, companion.brief_text(habit_lines=lines, team_lines=team_lines)
                  + ("\n\n↩️ Missed something yesterday? Reply with what got in the way." if rep else ""), buttons=BRIEF_BUTTONS)
+    if companion.ROUTINE.is_file() and not team.on("Coach"):
+        send_document(chat, companion.ROUTINE, caption=companion.training_caption())
     if rep:
         yesterday = rep["today"] - timedelta(days=1)
         missed = [s["name"] for s in rep["habits"] if s["per_week"] == 7 and s["active_yesterday"] and not s["done_yesterday"]]
@@ -998,6 +1060,8 @@ def send_review(chat):
     proposal, buttons, lines = None, None, None
     if rep:
         lines, proposal = coach.review_lines(rep)
+        if team.on("Coach") or team.on("Teacher"):
+            lines = lines + ["", "👥 Training and English: your Coach and Teacher send their own Sunday reports."]
     if proposal:
         STATE["review_proposal"] = proposal
         companion.save_state(STATE)
@@ -1007,8 +1071,13 @@ def send_review(chat):
 
 def send_coach(chat):
     """Nags and the evening check-in from coach.tick."""
-    for text, buttons in coach.tick(STATE):
-        reply(chat, text, buttons=buttons)
+    for text, buttons, attach_routine in coach.tick(STATE):
+        if attach_routine and companion.ROUTINE.is_file():
+            sent = send_document(chat, companion.ROUTINE, caption=text, buttons=buttons)
+            if not sent:
+                reply(chat, "I couldn't attach the Obsidian routine note. Please try /train.")
+        else:
+            reply(chat, text, buttons=buttons)
     companion.save_state(STATE)
 
 
@@ -1016,15 +1085,16 @@ def command(chat, text):
     cmd, _, arg = text.strip().partition(" ")
     cmd, arg = cmd.split("@")[0].lower(), arg.strip()
     if cmd in ("/start", "/help"):
-        reply(chat, HELP.format(schedule=schedule_text()))
+        reply(chat, HELP.format(schedule=schedule_text(), coach=team.handle("Coach"), teacher=team.handle("Teacher")))
     elif cmd in SOON:
         reply(chat, SOON[cmd])
     elif cmd == "/todo":
-        week = companion.this_week()
-        rest = len(companion.open_tasks()) - len(week)
-        lines = [f"{i}. {companion.plain(t[2])}" for i, t in enumerate(week, 1)] or ["Nothing for this week. 🎉"]
-        reply(chat, "📌 This week\n" + "\n".join(lines) + (f"\n\n+{rest} more for later in Pending Tasks." if rest else "")
-              + "\nTick one: /done <words>")
+        groups = {}  # every open task, titles only, by section
+        for _, section, text, _ in companion.open_tasks():
+            groups.setdefault(section.lstrip("# ").strip(), []).append(f"• {companion.task_title(text)}")
+        parts = [f"{name}\n" + "\n".join(items) for name, items in groups.items()]
+        reply(chat, "📌 Your tasks\n\n" + ("\n\n".join(parts) if parts else "Nothing pending. 🎉")
+              + "\n\nTick one: /done <words>")
     elif cmd == "/add":
         if not arg:
             reply(chat, "Usage: /add <task>, e.g. /add book the C1 exam")
@@ -1039,32 +1109,57 @@ def command(chat, text):
         if arg and len(matches) == 1:
             line, _, task, _ = matches[0]
             ok = companion.tick_task(line, task)
-            reply(chat, f"✅ Done: {companion.plain(task)}" if ok else "That task just changed. Try again.")
+            reply(chat, f"✅ Done: {companion.task_title(task)}" if ok else "That task just changed. Try again.")
         elif not matches:
             reply(chat, f"No open task matches \"{arg}\". /todo lists them." if arg else "Nothing open this week. 🎉")
         else:
             STATE["done_choices"] = {str(t[0]): t[2] for t in matches[:8]}
             companion.save_state(STATE)
-            reply(chat, "Which one is done?", buttons=[[(companion.plain(t[2])[:60], f"done:{t[0]}")] for t in matches[:8]])
+            reply(chat, "Which one is done?", buttons=[[(companion.task_title(t[2])[:60], f"done:{t[0]}")] for t in matches[:8]])
     elif cmd == "/q":
         send_question(chat)
+    elif cmd == "/standup" and team.on("Teacher"):
+        reply(chat, f"🗣 Standups live with your English Teacher now: open {team.handle('Teacher')} and send /speak (or just a voice "
+                    "note there). It corrects you and ticks English. " + team.english_line())
     elif cmd == "/standup":
         send_standup(chat)
+    elif cmd == "/train" and team.on("Coach"):
+        reply(chat, f"🏋️ Training is your Coach's: open {team.handle('Coach')} (/today, /train there). " + team.training_line())
+    elif cmd == "/goals":
+        reply(chat, companion.goals_text())
+    elif cmd == "/team":
+        reply(chat, "👥 Your team today\n" + "\n".join(team.lines() or ["Only me so far."])
+              + "\n\n🤖 Me: vault, goals, tasks and daily habits. /help")
+    elif cmd == "/ask":
+        if not arg:
+            reply(chat, "Usage: /ask <question>, e.g. /ask what did I decide about the DDIA pace?")
+        elif not ASSIST.ai_on():
+            reply(chat, "❓ /ask needs Claude Code connected: run `claude setup-token` on your PC, put the result in scripts/.env as "
+                        "CLAUDE_CODE_OAUTH_TOKEN=, then restart the bot.")
+        else:
+            status = reply(chat, "🔎 Reading your vault…")
+            threading.Thread(target=answer_question, args=(chat, arg, status), daemon=True).start()
     elif cmd == "/train":
-        status = companion.training_status()
-        day = int(arg) if arg in ("1", "2") else status["next"]
-        plan = companion.session_plan(day)
-        if not plan:
+        day = int(arg) if arg in ("1", "2") else None
+        caption = companion.training_caption(day)
+        if not caption or not companion.ROUTINE.is_file():
             reply(chat, "The routine canvas wasn't found (02 - Areas/Training/Full Training Routine.canvas).")
         else:
-            reply(chat, f"🏋️ {companion.DAY_NAMES[day]} (~40 min)\n\n{plan}\n\n{companion.training_line()}\n"
-                        f"When you finish, send: Workout, day {day}. …your reps per set…")
+            if not send_document(chat, companion.ROUTINE, caption=caption):
+                reply(chat, "I couldn't attach the Obsidian routine note. Please try again later.")
     elif cmd == "/habits":
         if not habits.configured():
             reply(chat, "The habit tracker app isn't connected: set HABITS_API_URL and HABITS_API_TOKEN in scripts/.env.")
         else:
             rep = habit_report()
             reply(chat, habits.week_text(rep) if rep else "📊 The habit tracker app couldn't be reached, and there's no saved copy yet.")
+    elif cmd == "/lock":
+        if not habits.configured():
+            reply(chat, "The habit tracker app isn't connected: set HABITS_API_URL and HABITS_API_TOKEN in scripts/.env.")
+        else:
+            status = habits.lock_status()
+            reply(chat, habits.lock_line(status) if status else
+                  "🔓 The focus lock is off. Turn it on in the app: Settings → Focus lock.")
     elif cmd == "/brief":
         send_brief(chat)
     elif cmd == "/review":
@@ -1102,6 +1197,28 @@ def due(spec, key, window_hours):
     return start <= now < start + timedelta(hours=window_hours) and STATE.get(key) != period and period
 
 
+TASK_TIMES = ("13:00", "19:00")  # this week's tasks that no teammate owns, twice a day
+
+
+def send_tasks(chat):
+    """At each TASK_TIMES, the open tasks of this week that belong to the Assistant (team.py), with a ✅ per task."""
+    now = datetime.now()
+    sent = STATE.setdefault("tasks_sent", [])
+    for t in TASK_TIMES:
+        key = f"{now.date()}:{t}"
+        h, m = map(int, t.split(":"))
+        if now >= now.replace(hour=h, minute=m, second=0) and key not in sent:
+            sent.append(key)
+            del sent[:-20]
+            items = team.related_tasks("Assistant")[:5]
+            if items:
+                STATE["done_choices"] = {str(line): text for line, text in items}
+                reply(chat, "📌 Still pending this week:\n" + "\n".join(f"• {companion.task_title(x)}" for _, x in items)
+                      + "\nTap the ones you've done.", buttons=[[("✅ " + companion.task_title(x)[:40], f"done:{line}")] for line, x in items])
+            companion.save_state(STATE)
+            return
+
+
 def scheduled():
     if not OWNER:
         return
@@ -1111,6 +1228,7 @@ def scheduled():
             STATE["brief"] = period
             companion.save_state(STATE)
         send_coach(OWNER)
+        send_tasks(OWNER)
         period = due(REVIEW_TIME, "review", 6)
         if period:
             send_review(OWNER)
@@ -1133,6 +1251,12 @@ def main():
     shutil.rmtree(STAGE, ignore_errors=True)  # media of captures held before a restart
     if os.environ.get("WHISPER_PRELOAD", "1") != "0":
         threading.Thread(target=preload_whisper, daemon=True).start()
+    if os.environ.get("TRAINER_BOT_TOKEN"):  # the personal trainer: its own Telegram bot, same process (trainer.py)
+        import trainer
+        threading.Thread(target=trainer.main, name="trainer", daemon=True).start()
+    if os.environ.get("TEACHER_BOT_TOKEN"):  # the English teacher: its own bot, sharing this process's Whisper (teacher.py)
+        import teacher
+        threading.Thread(target=teacher.main, kwargs={"transcribe": transcribe}, name="teacher", daemon=True).start()
     try:
         api("setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in COMMANDS]))
     except Exception as e:

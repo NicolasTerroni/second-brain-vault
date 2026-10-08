@@ -180,6 +180,17 @@ To keep it running, use a systemd service with `ExecStart=/home/<you>/Vault/scri
 - **Docker didn't start at sign-in although "Start Docker Desktop when you sign in" is on**: check Task Manager → Startup apps → Docker Desktop is *Enabled*. Turning the Docker setting off, applying, then on again rewrites the entry.
 - **`unhealthy` bot**: `docker compose logs --tail 50 bot` to see where it stopped, then `docker compose restart bot`.
 
+## Personal trainer (optional)
+A second Telegram bot that plans your training week, asks when you'll train, nags until you start, logs every set and writes the strength log (`trainer.py`; what it does and its persona: `02 - Areas/Training/Coach.md`). It runs **inside the bot container** as a thread, so there is nothing else to start.
+1. In Telegram, message **@BotFather** → `/newbot` → name it (e.g. "Coach"). Copy the token into `scripts/.env` as `TRAINER_BOT_TOKEN=...`. It must be a different bot from the capture bot.
+2. Optional, for the coach's own words and free questions: on your PC run `claude setup-token` (it uses your Claude subscription) and put the result in `scripts/.env` as `CLAUDE_CODE_OAUTH_TOKEN=...`. The image already includes a pinned Claude Code. Without the token the coach uses fixed messages.
+3. `docker compose restart bot`. The logs show `Trainer running. AI: Claude Code` (or `templates`). Open your new bot in Telegram and send `/start`.
+
+While the trainer is on, the capture bot no longer nags about the Strength habit. Timing settings (`TRAINER_*`) are listed in `.env.example`.
+
+## English teacher (optional)
+A third Telegram bot, also a thread of the bot container: a daily drill on your past English mistakes, a speaking session on workdays with nags until you reach the target, Whisper transcription, corrections into Daily Speaking Practice and the English habit ticked (`teacher.py`; brief: `02 - Areas/English/English Teacher.md`). Create a bot with @BotFather, put its token in `scripts/.env` as `TEACHER_BOT_TOKEN=...`, press Start in its chat, then `docker compose restart bot`. Corrections and answers need `CLAUDE_CODE_OAUTH_TOKEN` (see above). Shared code for both companion bots: `botkit.py`.
+
 ## Habit tracker connection (optional)
 
-Set `HABITS_API_URL` and `HABITS_API_TOKEN` in `scripts/.env` to connect the bot to the Everyday habit tracker app (see the app's README, *Integration endpoints*). Then the bot writes `Habit Consistency` and `Habit Log` in the Discipline area and nags about open habits. Tune it with `CHECKIN_TIME`, `NAG_EVERY`, `NAG_GRACE` and `NAG_UNTIL` (`scripts/.env.example`), then `docker compose restart bot`.
+Set `HABITS_API_URL` and `HABITS_API_TOKEN` in `scripts/.env` to connect the bot to the Everyday habit tracker app (see the app's README, *Integration endpoints*). Then the bot writes `Habit Consistency` and `Habit Log` in the Discipline area and nags about open habits. The morning brief, Strength reminders and `/train` send the actual routine `.md` note as a Telegram document, preserving its Obsidian wikilinks; the caption also includes an `obsidian://` link to open the synced note. Tune reminders with `CHECKIN_TIME`, `NAG_EVERY`, `NAG_GRACE` and `NAG_UNTIL` (`scripts/.env.example`), then `docker compose restart bot`.

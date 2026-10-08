@@ -28,6 +28,10 @@ scripts/.env
 scripts/cookies.txt
 scripts/telegram.offset*
 scripts/telegram.state*
+scripts/trainer.state*
+scripts/trainer.offset
+scripts/teacher.state*
+scripts/teacher.offset
 scripts/*.log
 scripts/vendor/
 scripts/.venv/
