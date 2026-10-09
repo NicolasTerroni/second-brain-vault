@@ -547,6 +547,8 @@ def rest_note(today):
 
 
 def report_missed(d, today):
+    if days().get(d.isoformat(), {}).get("reason"):  # already explained (e.g. a logged football match)
+        return
     s_left = target() - week_done(today) - len([p for p in planned(today) if p >= today])
     send(say("yesterday's planned session didn't happen; ask what got in the way, no scolding",
              f"missed {DAYS[d.weekday()]} {d:%d %b}; this week {week_done(today)}/{target()}",
@@ -567,10 +569,11 @@ def weekly_report(today):
     done = week_done(today)
     missed = [k for k, v in days().items() if v["status"] == "missed" and m <= date.fromisoformat(k) <= today]
     prs = [p for p in S.get("prs", []) if p["date"] >= m.isoformat()]
+    other = ", ".join(f"{a['name']} {dur(a['minutes'])}" for a in activities(m))
     facts = (f"sessions {done}/{target()}; missed {len(missed)}; records: "
-             + (", ".join(f"{p['name']} {p['value']}" for p in prs) or "none"))
+             + (", ".join(f"{p['name']} {p['value']}" for p in prs) or "none") + (f"; other sports: {other}" if other else ""))
     fallback = f"📊 This week: {done}/{target()} sessions." + (f" Records: {', '.join(p['name'] + ' ' + str(p['value']) for p in prs)}." if prs else "") \
-        + (" Every session counted. 💪" if done >= target() else " Next week we get all of them.")
+        + (f" Also: {other}." if other else "") + (" Every session counted. 💪" if done >= target() else " Next week we get all of them.")
     send(say("Sunday weekly report: sessions, records, one thing to improve next week", facts, fallback))
 
 
@@ -709,6 +712,187 @@ def finish_session():
          + team.after_training(today))
 
 
+# ---------- other sports and activities (football, padel, runs…) ----------
+ACTIVITY_LOG = ROOT / "02 - Areas" / "Training" / "Activity Log.md"
+SPORTS = [  # (name, emoji, hard on the legs, words that name it)
+    ("Football", "⚽", True, ("football", "fútbol", "futbol", "soccer", "futsal", "fulbito", "partido")),
+    ("Padel", "🎾", True, ("padel", "pádel")),
+    ("Tennis", "🎾", True, ("tennis", "tenis")),
+    ("Basketball", "🏀", True, ("basketball", "basket", "básquet", "basquet")),
+    ("Volleyball", "🏐", True, ("volleyball", "voley", "vóley")),
+    ("Running", "🏃", True, ("running", "run", "ran", "jog", "jogging", "jogged", "correr", "corrí", "trote")),
+    ("Cycling", "🚴", True, ("cycling", "cycled", "bike", "biked", "biking", "bici", "bicicleta")),
+    ("Swimming", "🏊", False, ("swim", "swam", "swimming", "natación", "nadé", "nadar")),
+    ("Hiking", "🥾", True, ("hike", "hiked", "hiking", "trekking", "senderismo")),
+    ("Climbing", "🧗", False, ("climbing", "climbed", "escalada", "bouldering")),
+    ("Yoga", "🧘", False, ("yoga",)),
+    ("Combat sports", "🥊", False, ("boxing", "boxeo", "kickboxing", "muay thai", "bjj", "jiu jitsu", "judo")),
+    ("Surf", "🏄", False, ("surf", "surfing", "surfed")),
+    ("Long walk", "🚶", True, ("long walk", "caminata")),
+    ("Dance", "💃", True, ("dance", "danced", "dancing", "bailé", "bailar")),
+]
+WEEKDAYS = {"monday": 0, "lunes": 0, "tuesday": 1, "martes": 1, "wednesday": 2, "miércoles": 2, "miercoles": 2,
+            "thursday": 3, "jueves": 3, "friday": 4, "viernes": 4, "saturday": 5, "sábado": 5, "sabado": 5,
+            "sunday": 6, "domingo": 6}
+EFFORTS = {"easy": "😌 Easy", "medium": "😤 Medium", "hard": "🥵 Hard"}
+
+
+def has_word(text, word):
+    return re.search(rf"(?<![\w]){re.escape(word)}(?![\w])", text) is not None
+
+
+def parse_minutes(t):
+    t = t.lower()
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:h|hs|hr|hrs|hour|hours|hora|horas)(?![a-z])(?:\s*(?:and|y)?\s*(\d+)\s*(?:m|min|mins|minutes|minutos)?(?![a-z]))?", t)
+    if m:
+        return round(float(m[1].replace(",", ".")) * 60) + int(m[2] or 0)
+    m = re.search(r"(\d+)\s*(?:'|m|min|mins|minute|minutes|minuto|minutos)\b", t)
+    if m:
+        return int(m[1])
+    if re.search(r"\b(an?|one|una) (hour|hora) (and a half|y media)\b|\bhour and a half\b", t):
+        return 90
+    if re.search(r"\bhalf an hour\b|\bmedia hora\b", t):
+        return 30
+    if re.search(r"\b(two|dos) (hours|horas)\b", t):
+        return 120
+    if re.search(r"\b(an?|one|una) (hour|hora)\b", t):
+        return 60
+    if re.fullmatch(r"\s*\d{2,3}\s*", t):  # a bare number answering "how long?"
+        return int(t)
+    return None
+
+
+def parse_day(t, today):
+    t = t.lower()
+    if re.search(r"day before yesterday|anteayer|antes de ayer", t):
+        return today - timedelta(days=2)
+    if re.search(r"\byesterday\b|\bayer\b|\blast night\b|\banoche\b", t):
+        return today - timedelta(days=1)
+    for word, wd in WEEKDAYS.items():
+        if has_word(t, word):
+            return today - timedelta(days=(today.weekday() - wd) % 7)
+    return today
+
+
+def parse_activity(text, today, loose=False):
+    """{'name', 'emoji', 'legs', 'date', 'minutes', 'note'} for a sport you did, or None. Questions and plans aren't logs."""
+    t = text.lower()
+    if "?" in t or re.search(r"\b(tomorrow|mañana|going to|gonna|will|voy a|vamos a|should i|can i|puedo)\b", t):
+        return None
+    sport = next(((n, e, l) for n, e, l, words in SPORTS if any(has_word(t, w) for w in words)), None)
+    if not sport:
+        if not loose or not text.strip():
+            return None
+        name = re.sub(r"\b(yesterday|today|ayer|hoy|last night|anoche|i|did|played|went|some|\d+\s*(min|minutes|h|hours)?)\b", " ",
+                      text, flags=re.I)
+        name = re.sub(r"\s+", " ", name).strip(" .,") or text.strip()
+        sport = (name[:40].capitalize(), "🏅", False)
+    return {"name": sport[0], "emoji": sport[1], "legs": sport[2], "date": parse_day(t, today).isoformat(),
+            "minutes": parse_minutes(t), "note": text.strip()[:200]}
+
+
+def dur(minutes):
+    h, m = divmod(int(minutes), 60)
+    return f"{h} h {m:02d}" if h and m else f"{h} h" if h else f"{m} min"
+
+
+def day_label(d):
+    today = now().date()
+    if d == today:
+        return "today"
+    if d == today - timedelta(days=1):
+        return "yesterday"
+    return f"{DAYS[d.weekday()]} {d.day}"
+
+
+def ask_activity():
+    """Fill in what's missing (how long, how hard), then save."""
+    a = S["activity"]
+    head = f"{a['emoji']} {a['name']}, {day_label(date.fromisoformat(a['date']))}"
+    if not a.get("minutes"):
+        send(f"{head}. How long?", [[("30 min", "am:30"), ("1 h", "am:60"), ("1 h 30", "am:90"), ("2 h", "am:120")]])
+    elif not a.get("effort"):
+        send(f"{head}, {dur(a['minutes'])}. How hard was it?", [[(v, f"ae:{k}") for k, v in EFFORTS.items()]])
+    else:
+        save_activity()
+
+
+def activities(since):
+    return [a for a in S.get("activities", []) if a["date"] >= since.isoformat()]
+
+
+def write_activity(a):
+    if not ACTIVITY_LOG.exists():
+        ACTIVITY_LOG.write_text(
+            f"---\ncreated: {now().date().isoformat()}\ntype: note\nstatus: active\ntags: [area/training, coach, activity-log]\n"
+            "source: own idea\n---\nSports and activities outside the strength routine (football, padel, runs…), logged by your "
+            "[[Coach]] when you tell it in Telegram. They don't replace strength sessions: the Coach uses them to plan around "
+            "fatigue and counts them in the weekly report. Strength sessions are in [[Full-Body Strength Log]].\n\n"
+            "## Log\n| Date | Activity | Duration | Effort | What you said |\n|---|---|---|---|---|\n",
+            encoding="utf-8", newline="\n")
+    lines = read(ACTIVITY_LOG).splitlines()
+    said = a["note"].replace("|", "/").replace("\n", " ")
+    row = f"| {a['date']} | {a['emoji']} {a['name']} | {dur(a['minutes'])} | {a['effort']} | {said} |"
+    inside, last = False, None
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            inside = line.startswith("## Log")
+        elif inside and line.startswith("|"):
+            last = i
+    if last is None:
+        lines += ["", "## Log", "| Date | Activity | Duration | Effort | What you said |", "|---|---|---|---|---|"]
+        last = len(lines) - 1
+    lines.insert(last + 1, row)
+    ACTIVITY_LOG.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def save_activity():
+    a = S.pop("activity")
+    d, today = date.fromisoformat(a["date"]), now().date()
+    try:
+        write_activity(a)
+    except Exception as e:
+        send(f"⚠️ I couldn't write the Activity Log ({e}).")
+        return
+    S.setdefault("activities", []).append({k: a[k] for k in ("date", "name", "minutes", "effort", "legs")})
+    S["activities"] = S["activities"][-60:]
+    entry = days().get(a["date"])
+    tomorrow = days().get((today + timedelta(days=1)).isoformat())
+    facts = [f"✅ In your Activity Log: {a['emoji']} {a['name']}, {day_label(d)}, {dur(a['minutes'])}, {a['effort']}."]
+    buttons = None
+    if entry and d < today and entry["status"] in ("planned", "missed"):
+        # a strength day that went to another sport: that's the reason, no need to ask
+        if a["date"] in S.get("to_report", []):
+            S["to_report"].remove(a["date"])
+        if not entry.get("reason"):
+            entry["reason"] = f"{a['name']} instead"
+            strength_reason(f"Played {a['name']} ({dur(a['minutes'])}, {a['effort']}) instead", "missed", d)
+        facts.append(f"That was a strength day, and {a['name']} doesn't replace the strength work. This week: {week_done(today)}/{target()}.")
+    elif entry and d == today and entry["status"] == "planned":
+        if a["effort"] == "hard":
+            facts.append("Today is still a strength day. After a hard one: move it to tomorrow, or do the 15-minute version now.")
+            buttons = [[("➡️ Move to tomorrow", "ax:"), ("⚡ 15-min version", f"mn:{today.isoformat()}")],
+                       [("💪 I'll still train today", "ak:")]]
+        else:
+            facts.append("Today is still a strength day: the session stays.")
+    elif tomorrow and tomorrow["status"] == "planned" and a["legs"] and a["effort"] == "hard" and d == today:
+        facts.append("Tomorrow is a strength day: sleep, eat your protein, and if the squats feel heavy, slow them down instead of skipping.")
+    else:
+        facts.append(f"Good for conditioning and recovery; it doesn't count as a strength session. This week: {week_done(today)}/{target()}.")
+    text = " ".join(facts)
+    send(say("the athlete did a sport besides strength training: acknowledge it with their numbers and say how it fits this week",
+             text, text), buttons)
+
+
+def start_activity(text, today, loose=False):
+    a = parse_activity(text, today, loose)
+    if not a:
+        return False
+    S["activity"] = a
+    ask_activity()
+    return True
+
+
 # ---------- buttons, messages, commands ----------
 def cancel_day(d, reason):
     entry = days().setdefault(d.isoformat(), {"time": None, "status": "planned"})
@@ -817,6 +1001,16 @@ def button(q):
         send(f"⏰ {new} then. I'll be here.")
     elif data in ("ru", "rm", "rn", "rs", "rf") or data.startswith("r:"):
         session_button(data)
+    elif data.startswith("am:") and S.get("activity"):
+        S["activity"]["minutes"] = int(data[3:])
+        ask_activity()
+    elif data.startswith("ae:") and S.get("activity"):
+        S["activity"]["effort"] = data[3:]
+        ask_activity()
+    elif data == "ax:":
+        cancel_day(now().date(), "Played another sport today")
+    elif data == "ak:":
+        send("Good. Warm up longer than usual and keep the form clean.")
     save_state()
 
 
@@ -856,6 +1050,15 @@ def text_message(text):
             send("Noted in Habit Reasons. Today we make it count.")
     elif t.startswith("/"):
         command(t)
+    elif S.get("activity") and not S["activity"].get("minutes") and parse_minutes(t):
+        S["activity"]["minutes"] = parse_minutes(t)
+        ask_activity()
+    elif kind == "activity":
+        S.pop("pending", None)
+        if not start_activity(t, now().date(), loose=True):
+            send("Tell me like this: football yesterday 90 min.")
+    elif start_activity(t, now().date()):
+        pass
     else:
         answer = claude(f"The athlete writes: {t}\nAnswer as their coach in under 120 words, plain text. Use the vault when "
                         "useful: index.md, Coach.md, the Training notes, Full-Body Strength Log, About Me. If they ask you to record "
@@ -880,7 +1083,8 @@ def status_text():
 
 HELP = ("🏋️ I'm your coach: training and daily mobility. I plan your week on Sunday night, ask when you'll train, push you "
         "until you start and log every set with you. Every day I push your mobility until it's ticked.\n/today — today and this week\n/plan — change this week's days\n/train — start a session now (/train 1, /train 2)\n"
-        "/time 18:30 — set today's time\n/skip — can't train today\n/week — this week's report\nOr just ask me anything.")
+        "/time 18:30 — set today's time\n/skip — can't train today\n/activity — log another sport (or just write "
+        "\"played football yesterday, 90 min\")\n/week — this week's report\nOr just ask me anything.")
 
 
 def command(text):
@@ -905,6 +1109,10 @@ def command(text):
         button({"id": "", "data": f"cx:{today.isoformat()}"})
     elif cmd == "/week":
         weekly_report(today)
+    elif cmd == "/activity":
+        if not (arg.strip() and start_activity(arg, today, loose=True)):
+            S["pending"] = {"kind": "activity"}
+            send("What did you do? E.g. football yesterday 90 min, padel today 1 h, a 5 km run.")
     else:
         send("Unknown command. /help lists them.")
 
@@ -917,7 +1125,8 @@ def handle(update):
 
 
 COMMANDS = [("today", "Today and this week"), ("plan", "Change this week's days"), ("train", "Start a session now"),
-            ("time", "Set today's time, e.g. /time 18:30"), ("skip", "Can't train today"), ("week", "This week's report"),
+            ("time", "Set today's time, e.g. /time 18:30"), ("skip", "Can't train today"), ("activity", "Log another sport (football…)"),
+            ("week", "This week's report"),
             ("help", "How the coach works")]
 
 

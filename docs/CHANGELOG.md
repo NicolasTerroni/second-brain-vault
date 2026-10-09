@@ -2,6 +2,12 @@
 
 Changes to the vault **system**: scripts, Docker, agent rules. Note-level operations are in `log.md`, which is personal and not committed. Pending ideas are in [BACKLOG.md](BACKLOG.md).
 
+## 2026-10-09
+
+### The Coach logs other sports; the Teacher corrects book photos
+- Coach (`trainer.py`): "played football yesterday, 90 min" (English or Spanish) or `/activity` logs a sport. `parse_activity` reads the sport, the day (yesterday, a weekday) and the duration; buttons ask for what's missing (how long, how hard). Rows go to `02 - Areas/Training/Activity Log.md`. A strength day spent on a sport records the reason in Habit Reasons and skips the next morning's "what got in the way?"; a hard sport on a training day offers to move the session (`ax:`) or the 15-minute version. The weekly report lists them. Questions and plans ("can I play tomorrow?") still go to Claude.
+- Teacher (`teacher.py`): photos (or image files, albums grouped by `media_group_id`) of the Business English book are saved to `00 - Inbox/attachments`, read by Claude Code (`Read` on the images), and answered with a score and corrections; corrections go to Daily Speaking Practice (so drills and grammar sets use them) and a row to `02 - Areas/English/Business English Workbook.md`. Raw capture tagged `business-english-book` (+ `corrected`). Answered even in quiet hours. Without Claude Code the capture waits for the english-teacher agent at organize.
+
 ## 2026-10-08
 
 ### The Coach and the English Teacher become agents

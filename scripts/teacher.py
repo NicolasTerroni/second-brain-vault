@@ -28,12 +28,14 @@ import coach
 import companion
 import habits
 from botkit import Bot, at, env, in_range
+from pathlib import Path
 from vault import ROOT, read
 
 SPEAKING = companion.SPEAKING
 NOTE = ROOT / "02 - Areas" / "English" / "English Teacher.md"
 INBOX = ROOT / "00 - Inbox"
 ATTACH = INBOX / "attachments"
+BOOK = ROOT / "02 - Areas" / "English" / "Business English Workbook.md"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 BOT = Bot("Teacher", "TEACHER_BOT_TOKEN", NOTE, "teacher", agent="english-teacher",
@@ -350,7 +352,7 @@ def write_capture(d, f, transcript, topic, corrected):
     return path
 
 
-def add_corrections(d, capture, bullets):
+def add_corrections(d, capture, bullets, origin="your voice note to the English teacher"):
     """Bullets into Daily Speaking Practice under '## Notes from <day>' (newest section first)."""
     lines = read(SPEAKING).splitlines()
     heading = f"## Notes from {d.isoformat()}"
@@ -363,7 +365,7 @@ def add_corrections(d, capture, bullets):
         lines[i:i] = [f"From [[{capture.stem}]] (English teacher)."] + bullets
     else:
         first = next((i for i, l in enumerate(lines) if l.startswith("## Notes from")), len(lines))
-        lines[first:first] = [heading, f"From your voice note to the English teacher ([[{capture.stem}]]).", *bullets, ""]
+        lines[first:first] = [heading, f"From {origin} ([[{capture.stem}]]).", *bullets, ""]
     SPEAKING.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
@@ -424,6 +426,112 @@ def voice(msg):
         hit(today, e)
     elif e["spoken"] < target and is_speak_day(today):
         send(f"{clock(target - e['spoken'])} to go. Keep talking: same topic, or what's next tomorrow.")
+
+
+# ---------- the Business English exercise book: photos of your answers, corrected ----------
+def book_photo(msg):
+    """A photo (or an image file) of book pages. Albums arrive as several messages: they're grouped and corrected together."""
+    fid = msg["photo"][-1]["file_id"] if "photo" in msg else msg["document"]["file_id"]
+    key = str(msg.get("media_group_id") or msg.get("message_id") or now().timestamp())
+    batch = S.setdefault("book", {}).setdefault(key, {"files": [], "caption": ""})
+    stamp = now().strftime("%Y%m%d-%H%M%S")
+    try:
+        f = BOT.download(fid, ATTACH / f"tg-teacher-book-{stamp}-{len(batch['files']) + 1}")
+    except Exception as e:
+        send(f"⚠️ I couldn't download the photo ({e}). Send it again?")
+        return
+    batch["files"].append(f.relative_to(ROOT).as_posix())
+    if msg.get("caption"):
+        batch["caption"] = msg["caption"].strip()
+    if len(batch["files"]) == 1:
+        batch["status"] = send("📸 Got it. Reading your answers…")
+
+
+def book_feedback(files, caption):
+    """(exercise, score, bullets, next, unreadable) from Claude Code, or None."""
+    out = BOT.claude(
+        "These are photos of my Business English exercise book with my own answers on them: "
+        + ", ".join(f'"{p}"' for p in files) + ". Read each image." + (f"\nMy note: {caption}" if caption else "")
+        + "\nCheck every answer I wrote. Don't edit any file: only answer, exactly in this format:\n"
+        "Exercise: <book, unit, page and exercise number if visible; else a short description>\n"
+        "Score: <right>/<answered>\n"
+        "- \"my answer\" → \"the right answer\". One short reason in plain words; if you name a grammar point, explain it with "
+        "a short example on another topic.\n"
+        "(one line per wrong or clearly unnatural answer; no lines if all are right)\n"
+        "Next: one concrete thing to practise.\n"
+        "If you can't read my answers, write only: UNREADABLE: <why, and how to retake the photo>.",
+        tools=True, model="sonnet", timeout=300)
+    if not out:
+        return None
+    if "UNREADABLE:" in out:
+        return None, None, [], None, out.split("UNREADABLE:", 1)[1].strip()
+    def field(name):
+        return next((l.split(":", 1)[1].strip() for l in out.splitlines() if l.strip().lower().startswith(name.lower() + ":")), None)
+    bullets = [l.strip() for l in out.splitlines() if l.strip().startswith("- ") and "→" in l]
+    return field("Exercise") or "Book exercise", field("Score"), bullets, field("Next"), None
+
+
+def write_book_capture(d, files, caption, corrected):
+    INBOX.mkdir(exist_ok=True)
+    stamp = now()
+    path = INBOX / f"{stamp:%Y-%m-%d %H%M} Business English book {d.isoformat()}.md"
+    n = 2
+    while path.exists():
+        path = INBOX / f"{stamp:%Y-%m-%d %H%M} Business English book {d.isoformat()} {n}.md"
+        n += 1
+    tags = ["telegram", "raw", "image", "english-practice", "teacher", "business-english-book"] + (["corrected"] if corrected else [])
+    body = (f"---\ncreated: {d.isoformat()}\ntype: source\nstatus: inbox\ntags: [{', '.join(tags)}]\nsource: \"telegram\"\n---\n"
+            "Raw Telegram capture awaiting classification; the captured content below is preserved.\n\n"
+            "Photos of the Business English exercise book sent to the English teacher."
+            + (f" Note: {caption}" if caption else "") + "\n"
+            + ("Corrections already written to [[Daily Speaking Practice]] and [[Business English Workbook]] by the teacher.\n"
+               if corrected else "Corrections come at the next organize (the english-teacher agent reads the photos).\n")
+            + "\n" + "\n".join(f"![[{Path(f).name}]]" for f in files) + "\n")
+    path.write_text(body, encoding="utf-8", newline="\n")
+    return path
+
+
+def add_book_entry(d, exercise, score, capture, n):
+    """A row in Business English Workbook's table (newest first)."""
+    if not BOOK.exists():
+        BOOK.write_text(
+            f"---\ncreated: {d.isoformat()}\ntype: note\nstatus: active\ntags: [area/english, english-practice, business-english]\n"
+            "source: own idea\n---\nYour Business English exercise book, done on paper and corrected by your [[English Teacher]]: "
+            "send it photos of the pages you've done (several at once is fine; a caption like \"unit 3, p. 24\" helps). Each wrong "
+            "answer becomes a correction in [[Daily Speaking Practice]], so it comes back in your drills and grammar sets. "
+            "Part of [[English to C1]].\n\n## Exercises (newest first)\n| Date | Exercise | Score | Corrections | Photos |\n"
+            "|---|---|---|---|---|\n", encoding="utf-8", newline="\n")
+    lines = read(BOOK).splitlines()
+    sep = next((i for i, l in enumerate(lines) if l.startswith("|---")), None)
+    row = f"| {d.isoformat()} | {exercise.replace('|', '/')} | {score or '–'} | {n} | [[{capture.stem}]] |"
+    if sep is None:
+        lines += ["", "## Exercises (newest first)", "| Date | Exercise | Score | Corrections | Photos |", "|---|---|---|---|---|", row]
+    else:
+        lines.insert(sep + 1, row)
+    BOOK.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+def correct_book():
+    """Correct the photos received since the last tick (one album = one batch)."""
+    for key in list(S.get("book", {})):
+        b = S["book"].pop(key)
+        today = now().date()
+        result = book_feedback(b["files"], b["caption"]) if BOT.ai_on() else None
+        if result and result[4]:  # unreadable: keep nothing half-done, ask for a better photo
+            send(f"📸 I can't read your answers: {result[4]}", edit=b.get("status"))
+            continue
+        exercise, score, bullets, nxt, _ = result or (None, None, [], None, None)
+        capture = write_book_capture(today, b["files"], b["caption"], bool(result))
+        if not result:
+            send(f"📘 Saved ({len(b['files'])} photo{'s' if len(b['files']) != 1 else ''}). I correct it once Claude Code is "
+                 "connected; until then I correct it when you organize the vault.", edit=b.get("status"))
+            continue
+        if bullets:
+            add_corrections(today, capture, bullets, "the Business English book")
+        add_book_entry(today, exercise, score, capture, len(bullets))
+        text = f"📘 {exercise}" + (f"\nScore: {score}" if score else "") + "\n\n" \
+            + ("\n".join(bullets) + "\n\nThese join your drills." if bullets else "All correct. 💪") + (f"\n\nNext: {nxt}" if nxt else "")
+        send(text, edit=b.get("status"))
 
 
 def hit(today, e):
@@ -500,6 +608,8 @@ def nudge_unanswered(t):
 def tick():
     t = now()
     today = t.date()
+    if BOT.owner and S.get("book"):
+        correct_book()
     if not BOT.owner or in_range(t, QUIET):
         return
     if t >= at(today, DRILL_TIME) and once(f"drill:{today}"):
@@ -568,6 +678,7 @@ HELP = ("🗣 I'm your English teacher. Every morning a drill on one of your pas
         "session that grows with you. I correct you and write it all into Daily Speaking Practice.\n"
         "/today — today's target and progress\n/speak — a speaking session now\n/exercise — another topic\n"
         "/drill — practise another past correction\n/grammar — a grammar set now\n/skip — can't today\n/week — this week's report\n"
+        "📸 Send photos of your Business English book (your answers on them) and I correct them.\n"
         "Or ask me anything about English.")
 
 
@@ -665,6 +776,8 @@ def handle(update):
     msg = update.get("message", {})
     if any(k in msg for k in ("voice", "audio", "video_note")):
         voice(msg)
+    elif "photo" in msg or msg.get("document", {}).get("mime_type", "").startswith("image/"):
+        book_photo(msg)
     elif msg.get("text"):
         text_message(msg["text"], msg)
 
