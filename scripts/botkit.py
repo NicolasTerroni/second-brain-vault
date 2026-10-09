@@ -140,7 +140,7 @@ class Bot:
     def brief(self):
         """## Persona plus the profile section (## Athlete / ## Student / ## Owner) of the bot's note, and the team: its system prompt."""
         text = read(self.note) if self.note.exists() else ""
-        parts = re.findall(r"^## (Persona|Athlete|Student|Owner)\n(.*?)(?=^## |\Z)", text, flags=re.M | re.S)
+        parts = re.findall(r"^## (Persona|Athlete|Student|Owner|Learned from your feedback)\n(.*?)(?=^## |\Z)", text, flags=re.M | re.S)
         own = "\n\n".join(f"{h}:\n{companion.plain(b).strip()}" for h, b in parts) or "You are a demanding, caring coach."
         try:
             return own + "\n\nTeam:\n" + team.context(self.name)
@@ -215,8 +215,75 @@ class Bot:
                               [[("✅ " + companion.task_title(x)[:40], f"td:{line}")] for line, x in items])
                 return
 
+    # ---------- learning from your feedback ----------
+    FEEDBACK = "## Learned from your feedback"
+    FEEDBACK_HINT = re.compile(r"^\s*(from now on|in the future|next time|stop\b|don'?t\b|do not\b|never\b|always\b|i (don'?t|do not) "
+                               r"(like|want)|i'?d (rather|prefer)|i prefer|please (don'?t|stop|always|never)|you (should|must|need to|have to)|"
+                               r"a partir de ahora|de ahora en m[aá]s|no me (gusta|mandes|env[ií]es)|deja de|siempre|nunca|prefiero)", re.I)
+
+    def add_feedback(self, text, now):
+        """A dated line in the brief's 'Learned from your feedback' section: it's in every prompt from now on, and the
+        Assistant turns lines marked *to apply* into code changes at the next organize."""
+        body = read(self.note) if self.note.exists() else ""
+        line = f"- {now.date().isoformat()}: {text.strip()} — *to apply*"
+        if self.FEEDBACK in body:
+            lines = body.splitlines()
+            i = lines.index(self.FEEDBACK) + 1
+            while i < len(lines) and not lines[i].startswith("## "):
+                i += 1
+            while i > 0 and not lines[i - 1].strip():
+                i -= 1
+            lines.insert(i, line)
+            body = "\n".join(lines) + "\n"
+        else:
+            body = body.rstrip("\n") + f"\n\n{self.FEEDBACK}\n{line}\n"
+        self.note.write_text(body, encoding="utf-8", newline="\n")
+
+    def maybe_feedback(self, text):
+        """'From now on…', 'don't…', 'a partir de ahora…': offer to save it as feedback. True when asked."""
+        if text.startswith("/") or not self.FEEDBACK_HINT.search(text) or text.rstrip().endswith("?"):
+            return False
+        self.S["fb_draft"] = text.strip()[:400]
+        self.send("📝 Is that feedback on how I work? I'll save it in my brief and follow it from now on.",
+                  [[("✅ Yes, learn it", "fb:y"), ("❌ No, just chatting", "fb:n")]])
+        return True
+
+    def feedback_command(self, arg, now):
+        if arg.strip():
+            self.save_feedback(arg, now)
+        else:
+            self.S["fb_wait"] = True
+            self.send("📝 What should I do differently? One message: what bothers you, or what you want instead.")
+
+    def save_feedback(self, text, now):
+        try:
+            self.add_feedback(text, now)
+        except Exception as e:
+            self.send(f"⚠️ I couldn't write my brief ({e}).")
+            return
+        if self.ai_on():
+            self.send("✅ Learned. It's in my brief (Learned from your feedback), so I follow it from now on; anything that needs "
+                      "a change in how I'm built gets done at the next vault organize.")
+        else:
+            self.send("✅ Saved in my brief (Learned from your feedback). My messages are fixed until Claude Code is connected, "
+                      "so the change itself is built in at the next vault organize.")
+
+    def feedback_text(self, text, now):
+        """A reply to /feedback. True when handled."""
+        if self.S.pop("fb_wait", None):
+            self.save_feedback(text, now)
+            return True
+        return False
+
     def common_button(self, data, now):
-        """✅ habit, ⏰ snooze, ✅ task. True when handled."""
+        """✅ habit, ⏰ snooze, ✅ task, 📝 feedback. True when handled."""
+        if data in ("fb:y", "fb:n"):
+            draft = self.S.pop("fb_draft", None)
+            if data == "fb:y" and draft:
+                self.save_feedback(draft, now)
+            elif data == "fb:n":
+                self.send("OK.")
+            return True
         if data.startswith("hq:"):  # a quick amount for a quantity habit, e.g. +30 g of protein
             alias, _, value = data[3:].rpartition(":")
             s = self.app_habit(alias)

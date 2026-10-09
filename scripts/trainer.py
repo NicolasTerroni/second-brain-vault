@@ -1050,6 +1050,8 @@ def text_message(text):
             send("Noted in Habit Reasons. Today we make it count.")
     elif t.startswith("/"):
         command(t)
+    elif BOT.feedback_text(t, now()) or BOT.maybe_feedback(t):
+        pass
     elif S.get("activity") and not S["activity"].get("minutes") and parse_minutes(t):
         S["activity"]["minutes"] = parse_minutes(t)
         ask_activity()
@@ -1084,7 +1086,7 @@ def status_text():
 HELP = ("🏋️ I'm your coach: training and daily mobility. I plan your week on Sunday night, ask when you'll train, push you "
         "until you start and log every set with you. Every day I push your mobility until it's ticked.\n/today — today and this week\n/plan — change this week's days\n/train — start a session now (/train 1, /train 2)\n"
         "/time 18:30 — set today's time\n/skip — can't train today\n/activity — log another sport (or just write "
-        "\"played football yesterday, 90 min\")\n/week — this week's report\nOr just ask me anything.")
+        "\"played football yesterday, 90 min\")\n/week — this week's report\n/feedback — tell me what to do differently (I learn it)\nOr just ask me anything.")
 
 
 def command(text):
@@ -1109,6 +1111,8 @@ def command(text):
         button({"id": "", "data": f"cx:{today.isoformat()}"})
     elif cmd == "/week":
         weekly_report(today)
+    elif cmd == "/feedback":
+        BOT.feedback_command(arg, now())
     elif cmd == "/activity":
         if not (arg.strip() and start_activity(arg, today, loose=True)):
             S["pending"] = {"kind": "activity"}
@@ -1126,6 +1130,7 @@ def handle(update):
 
 COMMANDS = [("today", "Today and this week"), ("plan", "Change this week's days"), ("train", "Start a session now"),
             ("time", "Set today's time, e.g. /time 18:30"), ("skip", "Can't train today"), ("activity", "Log another sport (football…)"),
+            ("feedback", "Tell me what to do differently"),
             ("week", "This week's report"),
             ("help", "How the coach works")]
 

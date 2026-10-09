@@ -21,7 +21,9 @@ Config (scripts/.env):
 Runs inside the capture bot (telegram_bot.py starts it in a thread when TEACHER_BOT_TOKEN is set).
 """
 import hashlib
+import re
 import grammar
+import workenglish
 import team
 from datetime import datetime, timedelta
 import coach
@@ -164,14 +166,94 @@ def next_drill(today):
     return fresh[0] if fresh else None
 
 
+IDK = re.compile(r"^\s*(i\s*)?(don'?t|do not|dont)\s+know|^\s*idk\b|^\s*no\s+s[eé]\b|^\s*ni\s+idea|^\s*no\s+idea|"
+                 r"^\s*(teach|show)\s+me|^\s*no\s+lo\s+s[eé]", re.I)
+
+
+def lesson(better):
+    """("the better version", "why") from a correction's right-hand side: the quoted part(s), then the explanation."""
+    m = re.match(r'\s*((?:["“][^"”]+["”]\s*(?:/\s*)?)+)(.*)', better, re.S)
+    if not m:
+        return better.strip(), ""
+    return m[1].strip().rstrip("/").strip(), m[2].strip().lstrip(".,;: ").strip()
+
+
+def bank_rule(topic):
+    r = next((r for r in grammar.REWRITE if r[0] == topic), None)
+    return (r[4], r[5]) if r else None
+
+
+# a mistake's pattern -> (the rule in plain words, an example on another topic); grammar's bank where it has one
+RULES = [
+    (r"\b(explain|describ)\w* (her|him|me|them|us|you)\b", lambda: bank_rule("explain to")),
+    (r"\b(what|how|where|why|when|who) (does|do|did|is|are|can) \w+", lambda: bank_rule("question order")),
+    (r"\bsince\b.*\bago\b|\bsince (two|three|four|\d+) ", lambda: bank_rule("present perfect")),
+    (r"\b(I|we|you|they|what I) done\b", lambda: (
+        "\"Done\" is the past participle: it needs have. A finished time (yesterday, this morning) → I did it. "
+        "No time, or until now → I've done it.",
+        "\"I done my homework.\" → \"I did my homework yesterday.\" / \"I've done my homework.\"")),
+    (r"\b(she|he|it) (click|get|want|need|go|have|do|make|work|use|say|see|think|know|run|take)\b", lambda: (
+        "With he, she or it, a present-simple verb takes -s: she works, he gets, it runs (have → has, do → does, go → goes).",
+        "\"My sister live in Madrid and she work in a bank.\" → \"My sister lives in Madrid and she works in a bank.\"")),
+    (r"\b(at|in) the (side )?(menu|sidebar|page|screen)\b|\bin a startup\b", lambda: bank_rule("prepositions")),
+]
+
+
+def rule_for(said):
+    for rx, rule in RULES:
+        if re.search(rx, said, re.I):
+            return rule()
+    return None
+
+
+def lesson_text(said, better, head="📘 Lesson from your own English"):
+    good, why = lesson(better)
+    rule = rule_for(said)
+    return (f"{head}\nYou said: “{said}”\nBetter: {good}\n" + (f"Why: {why}\n" if why else "")
+            + (f"The rule: {rule[0]}\nExample on another topic: {rule[1]}\n" if rule else "")
+            + "\nNow use it: write (or say) one new sentence about your work (a pipeline, a client, a dashboard, your team) "
+              "with the same pattern. Reply to this message.")
+
+
 def send_drill(today):
     item = next_drill(today)
     if not item:
         send("🔁 No corrections to drill yet. Send me a voice note and we'll build them.")
         return
-    k, said, _ = item
-    msg = send(f"🔁 Drill: how would you say this better?\n“{said}”\nReply to this message, by text or a short voice note.")
-    S["pending"] = {"kind": "drill", "key": k, "msg": msg, "at": now().isoformat(timespec="seconds")}
+    k, said, better = item
+    if k not in S.get("srs", {}):  # never practised: teach it first, then you use it
+        msg = send(lesson_text(said, better))
+        mode = "lesson"
+    else:  # practised before: try to remember, with help one tap away
+        msg = send(f"🔁 Do you remember this one? You once said:\n“{said}”\nHow would you say it better? Reply by text or a "
+                   "short voice note. Not sure? Tap 💡 and I'll teach it again.", [[("💡 Teach me", f"dt:{k}")]])
+        mode = "recall"
+    S["pending"] = {"kind": "drill", "key": k, "msg": msg, "at": now().isoformat(timespec="seconds"), "mode": mode}
+
+
+def teach(key):
+    """The lesson for a correction, then you write your own work sentence with it."""
+    item = next((c for c in corrections() if c[0] == key), None)
+    if not item:
+        send("That correction isn't in your notes anymore. /drill for another one.")
+        return
+    _, said, better = item
+    msg = send(lesson_text(said, better, "📘 Here's how"))
+    S["pending"] = {"kind": "drill", "key": key, "msg": msg, "at": now().isoformat(timespec="seconds"), "mode": "lesson",
+                    "taught": True}
+
+
+def send_phrase(today):
+    """💼 One professional phrase a day for a data engineer (workenglish.PHRASES), in order."""
+    n = S.get("phrase_n", 0)
+    S["phrase_n"] = n + 1
+    S["phrase_today"] = {"date": today.isoformat(), "n": n}
+    send(workenglish.message(n))
+
+
+def phrase_today(today):
+    p = S.get("phrase_today") or {}
+    return workenglish.today_phrase(p["n"])[1] if p.get("date") == today.isoformat() else None
 
 
 def is_drill_answer(msg, seconds=None):
@@ -182,10 +264,15 @@ def is_drill_answer(msg, seconds=None):
         return False
     if p.get("msg") and msg.get("reply_to_message", {}).get("message_id") == p["msg"]:
         return True
-    fresh = now() - datetime.fromisoformat(p.get("at") or "2000-01-01T00:00") <= timedelta(hours=1)
+    sent = datetime.fromisoformat(p.get("at") or "2000-01-01T00:00")
+    fresh = now() - sent <= timedelta(hours=1)
     if seconds is not None:
         return fresh and seconds <= 30
-    return fresh and not msg.get("text", "").rstrip().endswith("?")
+    text = msg.get("text", "")
+    if IDK.search(text):
+        return True
+    # a text answer counts the same day (the morning lesson answered after work); questions stay questions
+    return sent.date() == now().date() and not text.rstrip().endswith("?")
 
 
 def grade(key, ok):
@@ -207,15 +294,32 @@ def drill_answer(answer):
         send("That correction isn't in your notes anymore. /drill for another one.")
         return
     k, said, better = item
-    verdict = BOT.claude(f"Drill. The student once said: \"{said}\". A better version: {better}\nThe student's new answer: \"{answer}\"\n"
-                         "Reply with CORRECT or WRONG as the first word, then one short sentence of feedback and, if WRONG, the "
-                         "natural version. Accept any natural, correct alternative.", model="haiku")
+    if IDK.search(answer):
+        if not pending.get("taught"):
+            grade(k, False)  # comes back tomorrow
+        teach(k)
+        return
+    good, _ = lesson(better)
+    lesson_mode = pending.get("mode") == "lesson"
+    task = ("The student wrote a NEW sentence about their work using the corrected pattern" if lesson_mode
+            else "The student tried to say it better")
+    verdict = BOT.claude(f"Drill. The student once said: \"{said}\". A better version: {better}\n{task}: \"{answer}\"\n"
+                         "Reply with CORRECT or WRONG as the first word, then teach in under 70 words: what's right or the fix, the "
+                         "rule in plain words with a short example on another topic, and how a senior data engineer would say it "
+                         "at work. Accept any natural, correct alternative.", model="haiku")
     if verdict:
         ok = verdict.strip().upper().startswith("CORRECT")
-        grade(k, ok)
+        if not pending.get("taught"):
+            grade(k, ok)
         send(("✅ " if ok else "❌ ") + verdict.split(None, 1)[1] if " " in verdict else verdict)
+    elif lesson_mode:
+        p = "dk" if pending.get("taught") else "dg"
+        send(f"Check your sentence against the pattern: {good}\nSame structure? Read yours out loud once.",
+             [[("✅ Yes, same pattern", f"{p}:{k}:1"), ("❌ Not quite", f"{p}:{k}:0")]])
     else:
-        send(f"Model answer: {better}\nDid you have it?", [[("✅ I had it", f"dg:{k}:1"), ("❌ Not quite", f"dg:{k}:0")]])
+        why = lesson(better)[1]
+        send(f"Model answer: {good}" + (f"\nWhy: {why}" if why else "") + "\nDid you have it?",
+             [[("✅ I had it", f"dg:{k}:1"), ("❌ Not quite", f"dg:{k}:0")]])
 
 
 # ---------- grammar (quiz polls + a rewrite, built on your mistakes) ----------
@@ -277,6 +381,11 @@ def poll_answer(pa):
 
 def rewrite_answer(answer):
     p = S.pop("pending", {})
+    if IDK.search(answer):
+        rewrite_done(p, False)
+        send(f"Here's how: {p.get('answer')}\nRead it out loud twice. Then write one sentence about your work (a pipeline, "
+             "a client, your team) with the same pattern, and send it to me.")
+        return
     verdict = BOT.claude(f"Grammar rewrite. Task: {p.get('prompt')}\nModel answer: {p.get('answer')}\nMy answer: \"{answer}\"\n"
                          "Reply with CORRECT or WRONG as the first word, then one short sentence: what's right, or the fix. "
                          "Accept any correct, natural alternative.", model="haiku")
@@ -322,8 +431,11 @@ def speak_prompt(d, shuffle=0, edit=None):
     e["shuffle"] = shuffle
     left = max(0, target_today(d) - e["spoken"])
     head = f"🎙 Speaking time. Today's target: {clock(target_today(d))}" + (f" ({clock(left)} left)" if e["spoken"] else "")
-    send(BOT.say("ask for today's speaking session", f"target {clock(target_today(d))}, level {tier() + 1}/4, topic: {e['topic']}",
-                 f"{head}.\nTopic: {e['topic']}\nSend me a voice note; several add up."),
+    phrase = phrase_today(d)
+    use = f"\n💼 Use today's phrase: “{phrase}”" if phrase else ""
+    send(BOT.say("ask for today's speaking session", f"target {clock(target_today(d))}, level {tier() + 1}/4, topic: {e['topic']}"
+                 + (f"; ask them to use today's work phrase: {phrase}" if phrase else ""),
+                 f"{head}.\nTopic: {e['topic']}{use}\nSend me a voice note; several add up."),
          [[("🎲 Another topic", f"tp:{shuffle + 1}")], [("⏰ +30 min", "sz"), ("🤕 Can't today", "cx")]], edit=edit)
 
 
@@ -376,8 +488,10 @@ def correct(transcript, topic):
         "Give 3 to 5 corrections, one per line, exactly in this format:\n"
         "- \"what I said\" → \"a more natural way\". One short reason.\n"
         "Only real mistakes or clearly unnatural phrasing; keep my meaning; ignore speech-recognition errors on names. "
-        "If there are fewer real mistakes, give fewer. Then one last line starting with \"Next:\" with one concrete thing "
-        "to practise tomorrow.", model="sonnet", timeout=150)
+        "If there are fewer real mistakes, give fewer. Where the English is correct but sounds casual for work, give the "
+        "version a senior data engineer or tech lead would say (same format). Every reason in plain words; if you name a "
+        "grammar point, add a short example on another topic. Then one last line starting with \"Next:\" with one concrete "
+        "thing to practise tomorrow.", model="sonnet", timeout=150)
     if not out:
         return None, None
     bullets = [l.strip() for l in out.splitlines() if l.strip().startswith("- ") and "→" in l]
@@ -614,6 +728,7 @@ def tick():
         return
     if t >= at(today, DRILL_TIME) and once(f"drill:{today}"):
         send_drill(today)
+        send_phrase(today)
     if t >= at(today, GRAMMAR_TIME) and once(f"grammar:{today}"):
         send_grammar(today)
     nudge_unanswered(t)
@@ -679,6 +794,7 @@ HELP = ("🗣 I'm your English teacher. Every morning a drill on one of your pas
         "/today — today's target and progress\n/speak — a speaking session now\n/exercise — another topic\n"
         "/drill — practise another past correction\n/grammar — a grammar set now\n/skip — can't today\n/week — this week's report\n"
         "📸 Send photos of your Business English book (your answers on them) and I correct them.\n"
+        "/feedback — tell me what to do differently (I learn it)\n"
         "Or ask me anything about English.")
 
 
@@ -695,6 +811,7 @@ def status_text():
 
 def command(text):
     cmd = text.split()[0].split("@")[0].lower()
+    arg = text.partition(" ")[2]
     today = now().date()
     if cmd in ("/start", "/help"):
         send(HELP)
@@ -706,6 +823,8 @@ def command(text):
         speak_prompt(today, day(today).get("shuffle", 0) + 1)
     elif cmd == "/grammar":
         send_grammar(today)
+    elif cmd == "/feedback":
+        BOT.feedback_command(arg, now())
     elif cmd == "/drill":
         send_drill(today)
     elif cmd == "/skip":
@@ -742,6 +861,14 @@ def button(q):
         p = S.pop("rewrite_check", None) or {}
         rewrite_done(p, data == "rg:1")
         send("Good." if data == "rg:1" else "Read the model answer out loud twice. It'll come back.")
+    elif data.startswith("dt:"):
+        p = S.get("pending") or {}
+        if p.get("kind") == "drill" and p.get("key") == data[3:] and not p.get("taught"):
+            grade(data[3:], False)  # comes back tomorrow
+        teach(data[3:])
+    elif data.startswith("dk:"):  # your sentence after I taught it: it comes back tomorrow either way
+        send("Good. It comes back tomorrow to stick." if data.endswith(":1")
+             else "Read the pattern out loud twice, then try one more sentence. It comes back tomorrow.")
     elif data.startswith("dg:"):
         _, k, ok = data.split(":")
         grade(k, ok == "1")
@@ -753,6 +880,8 @@ def text_message(t, msg=None):
     pending = S.get("pending") or {}
     if t.startswith("/"):
         command(t)
+    elif BOT.feedback_text(t, now()) or (not IDK.search(t) and BOT.maybe_feedback(t)):
+        pass
     elif is_drill_answer(msg or {"text": t}):
         drill_answer(t)
     elif pending.get("kind") == "skip":
@@ -784,7 +913,7 @@ def handle(update):
 
 COMMANDS = [("today", "Today's target and progress"), ("speak", "A speaking session now"), ("exercise", "Another topic"),
             ("drill", "Practise a past correction"), ("grammar", "A grammar set now"), ("skip", "Can't today"), ("week", "This week's report"),
-            ("help", "How the teacher works")]
+            ("feedback", "Tell me what to do differently"), ("help", "How the teacher works")]
 
 
 def main(transcribe=None):
