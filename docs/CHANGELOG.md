@@ -2,6 +2,12 @@
 
 Changes to the vault **system**: scripts, Docker, agent rules. Note-level operations are in `log.md`, which is personal and not committed. Pending ideas are in [BACKLOG.md](BACKLOG.md).
 
+## 2026-10-16
+
+### The English Teacher switches to job-interview English
+- `teacher.TOPICS`: 12 interview prompts in 4 levels (tell me about yourself; explaining past projects simply; behavioural questions; case studies and negotiation), from the teacher agent's *Learned from your feedback* line after the company closed. `topic_for` rotates daily through the level's prompts (no fixed standup); voice captures on these topics are tagged `interview-practice` instead of `standup`.
+- `workenglish.PHRASES`: 8 interview phrases (I led…, responsible for…, asking about the salary range, negotiating), inserted where the daily rotation is now.
+
 ## 2026-10-09
 
 ### The agents learn from feedback; the Teacher teaches before testing

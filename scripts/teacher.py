@@ -58,19 +58,19 @@ STEP, MAX_TARGET, STREAK_STEP = 15, 360, 3
 BOXES = [1, 3, 7, 14, 30]          # spaced repetition: days until the next drill of a correction, per box
 TRANSCRIBE = None                  # the capture bot's Whisper, passed in by main()
 
-TOPICS = [  # by level: the target decides the level (harder as it grows)
-    ["Your workday: what you did, what blocked you, what's next.",
-     "Explain one thing you learned today, as if to a colleague.",
-     "Describe your plan for tomorrow and why that order."],
-    ["Explain a technical idea from your work (bronze/silver/gold, dbt, indexes…) to a non-technical colleague.",
-     "Tell the story of a problem you solved this week: the symptom, the cause, the fix.",
-     "Summarize a DDIA idea you read recently and where it applies at your job."],
-    ["Argue for or against a decision your team made: two reasons and one risk.",
-     "A client says your app is too expensive. Answer the objection.",
-     "Compare two tools you know (e.g. BigQuery vs PostgreSQL) for a concrete use case and recommend one."],
-    ["Give a structured 3-minute talk: context, problem, options, recommendation. Use however, as a result, on top of that.",
-     "Tell a story from your life in your city using past simple and present perfect correctly.",
-     "Explain a trade-off you'd present to your CTO, then defend it against two objections."],
+TOPICS = [  # by level: the target decides the level. Job-interview English since the company closed (2026-10-16)
+    ["Tell me about yourself: your background, what you do as a data engineer, and what kind of role you want next.",
+     "Explain what happened with your last company and what you learned there, in a positive and professional way.",
+     "Describe a typical week as a tech lead: what you owned, who you worked with, what you delivered."],
+    ["Explain the PrestaShop connector to an interviewer who is not technical: the problem, what you built, the result.",
+     "Walk me through the bronze, silver and gold pipeline: why you designed it that way, and what the business got from it.",
+     "Explain the Shopify and PrestaShop connectors and how you migrated product images and thumbnails: what went wrong and how you fixed it."],
+    ["Tell me about a time something broke in production: what happened, what you did, what you changed afterwards (situation, task, action, result).",
+     "Tell me about a disagreement with a stakeholder or teammate about priorities, and how you resolved it.",
+     "\"You have been unemployed for some weeks. Why should we hire you?\" Answer it, then handle the follow-up: \"What are your weaknesses?\""],
+    ["Give a 3-minute case study: design a data platform for a multi-brand retail client, with trade-offs and risks.",
+     "Negotiation: say what role you would accept and under what conditions (salary range, remote or hybrid, growth), and how you'd respond to a lower offer. Use \"I would accept if…\" and \"buy time\".",
+     "Why Barcelona, why this company, and where do you see yourself in 3 years? Make it a confident, structured pitch."],
 ]
 
 
@@ -128,9 +128,7 @@ def tier():
 
 
 def topic_for(d, shuffle=0):
-    """Speaking days start with the standup; 🎲 moves through the current level's exercises."""
-    if shuffle == 0 and is_speak_day(d) and tier() < 2:
-        return TOPICS[0][0]
+    """A different interview question of your level each day; 🎲 moves to the next one."""
     bank = TOPICS[tier()]
     return bank[(d.toordinal() + shuffle) % len(bank)]
 
@@ -452,7 +450,7 @@ def write_capture(d, f, transcript, topic, corrected):
     while path.exists():
         path = INBOX / f"{stamp:%Y-%m-%d %H%M} English practice {d.isoformat()} {n}.md"
         n += 1
-    tags = ["telegram", "raw", "voice", "english-practice", "teacher"] + (["standup"] if topic == TOPICS[0][0] else []) \
+    tags = ["telegram", "raw", "voice", "english-practice", "teacher"] + (["interview-practice"] if any(topic in level for level in TOPICS) else []) \
         + (["corrected"] if corrected else [])
     body = (f"---\ncreated: {d.isoformat()}\ntype: source\nstatus: inbox\ntags: [{', '.join(tags)}]\nsource: \"telegram\"\n---\n"
             "Raw Telegram capture awaiting classification; the captured content below is preserved.\n\n"
