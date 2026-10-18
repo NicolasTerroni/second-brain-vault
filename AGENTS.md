@@ -81,6 +81,8 @@ When the user asks to process the Inbox:
 
 Multi-topic notes: split into atomic notes, each linked back to the original/source note.
 
+**"study tool: <name>" captures** (or any request to study a data or software tool): create the tool's note in `01 - Projects/Study Software and Data Engineering/Tools/` with the same sections as the existing tool notes (what it is, where it fits, why companies ask for it, built on, concepts, a free hands-on lab, interview questions, my notes, `level: aware`), add it to the table in `Data Engineering Tools Landscape` and to the project note's Tools table, and update `index.md`. Move the capture to `Sources/captures` as usual.
+
 **Unprocessed originals in PARA folders.** The user may have notes outside the Inbox that never went through this workflow: no frontmatter, no summary line, often just a link or a few lines. When asked to organize, find them (no `---` frontmatter, outside `Sources/`). Treat each as an Inbox capture: move it unchanged to `03 - Resources/Sources/<type>/` (`captures` for personal text, `social`, `videos` or `articles` for links), and write the distilled note in the folder where it was. The distilled note needs a different name from the raw one, so links stay unambiguous. Then repoint wiki links and canvases (`.canvas` files reference paths) to the distilled note; raw notes keep their own links. Non-note files such as `.canvas` stay where they are.
 
 ## LLM Wiki operations
